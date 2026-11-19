@@ -1,0 +1,10 @@
+{
+  "name": "night",
+  "pads": [
+    {"file": "drone.m4a", "mode": "loop", "gain": 0.5},
+    {"file": "hiss.wav",  "mode": "loop", "gain": 0.3, "seamless": false},
+    {"file": "tick.wav",  "name": "tk"},
+    null,
+    {"file": "glass.mp3", "gain": 0.6}
+  ]
+}
