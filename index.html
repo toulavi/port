@@ -6,7 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#121212">
-<title>port</title>
+<title>0.3</title>
 <style>
 :root{--bg:#121212;--fg:#ece9e2;--ac:#ff3b2f;--dim:rgba(236,233,226,.14)}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -67,6 +67,14 @@ input.red::-webkit-slider-thumb{background:var(--ac)}
 input.red::-moz-range-thumb{background:var(--ac)}
 #wave{width:100%;height:110px;border:1.5px solid var(--fg);border-radius:12px;touch-action:none;display:block}
 .sbtn{height:40px;width:40px;min-width:40px;padding:0}
+.sheet{max-height:80dvh;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch}
+.fxr{display:grid;grid-template-columns:1fr 46px 46px 46px;gap:6px;align-items:center;margin-bottom:6px}
+.fxr .nm{font-size:13px;font-weight:600}
+.fxr .ds{font-size:10px;opacity:.5;margin-top:2px}
+.fxr .btn{height:34px;min-width:0;padding:0;font-size:12px}
+.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:6px}
+.grid2 .btn{min-width:0}
+#kitname{padding:8px 0;cursor:pointer}
 </style>
 </head>
 <body>
@@ -92,27 +100,25 @@ input.red::-moz-range-thumb{background:var(--ac)}
 <input type="file" id="file" accept="audio/*" multiple>
 <div id="start">
   <h1>port</h1>
-  <p>pads: tap to play · loop pads latch<br>xy: touch to stutter · x = size · y = fx amount<br>2 fingers: spread +12 / pinch −12<br>tilt: filter · shake: crash<br>rec → exp: dry / wet / slices / gesture.mid</p>
+  <p>pads: tap to play · loop pads latch · tap kit name to switch kits<br>xy: touch to stutter · fx: assign effects to x / y<br>2 fingers: spread +12 / pinch −12<br>tilt: filter · shake: crash<br>rec → exp: dry / wet / slices / gesture.mid</p>
   <button class="btn" id="bStart">tap to start</button>
   <p>use wired out for sessions · keys 1–8, c = crash on desktop</p>
 </div>
 <div class="sheet" id="fxs">
-  <div class="hd"><div class="t">fx · y axis</div><button class="btn" data-close>close</button></div>
-  <div class="lbl">choose any combination · y bottom = off, top = max</div>
-  <div class="grid4" id="fxBtns">
-    <button class="btn" data-fx="drift">drift</button>
-    <button class="btn" data-fx="decay">decay</button>
-    <button class="btn" data-fx="density">density</button>
-    <button class="btn" data-fx="smear">smear</button>
-  </div>
+  <div class="hd"><div class="t">fx</div><button class="btn" data-close>close</button></div>
+  <div class="lbl">assign each to x, y or off · stack as many as you like</div>
+  <div id="fxRows"></div>
   <div class="lbl">drift direction</div>
   <div class="grid3" id="dirBtns">
     <button class="btn" data-dir="-1">down</button>
     <button class="btn" data-dir="1">up</button>
     <button class="btn" data-dir="0">±</button>
   </div>
-  <div class="lbl">kit</div>
-  <div class="grid3"><button class="btn" id="bDemo">demo kit</button></div>
+</div>
+<div class="sheet" id="kits">
+  <div class="hd"><div class="t">kits</div><button class="btn" id="kitRefresh">refresh</button><button class="btn" data-close>close</button></div>
+  <div class="grid2" id="kitList"></div>
+  <div class="lbl" id="kitNote"></div>
 </div>
 <div class="sheet" id="editor">
   <div class="hd">
@@ -144,9 +150,11 @@ class PortFX extends AudioWorkletProcessor{
     this.bL=new Float32Array(this.N); this.bR=new Float32Array(this.N);
     this.w=0; this.engaged=false; this.mix=0; this.anchor=0; this.pos=0;
     this.size=Math.floor(sampleRate*0.12); this.targetSize=this.size;
-    this.pitch=1; this.amt=0; this.fx={drift:true,decay:false,density:false,smear:false}; this.dir=-1;
+    this.pitch=1; this.dir=-1;
+    this.a={drift:0,decay:0,density:0,smear:0,jitter:0,reverse:0,tape:-1,ring:0};
     this.driftMul=1; this.cycGain=1; this.lpC=1; this.lpL=0; this.lpR=0; this.cycOn=true; this.densG=1;
-    this.grains=[0,1,2].map(()=>({g:0,G:0,o:0,p:0}));
+    this.jOff=0; this.cycDir=1; this.tapeR=1; this.ringPh=0;
+    this.grains=[0,1,2].map(()=>({g:0,G:0,o:0,p:0,stagger:0}));
     this.crashLeft=0; this.crashSeg=0; this.crashRate=1; this.crashMul=1;
     this.fade=Math.max(8,Math.floor(sampleRate*0.0015));
     this.port.onmessage=e=>{
@@ -156,10 +164,9 @@ class PortFX extends AudioWorkletProcessor{
       else if(d.type==='release'){ this.engaged=false; }
       else if(d.type==='set'){
         if(d.size!=null) this.targetSize=Math.max(64,Math.min(Math.floor(this.N/4),Math.floor(d.size*sampleRate/1000)));
-        if(d.amt!=null) this.amt=d.amt;
         if(d.pitch!=null) this.pitch=d.pitch;
-        if(d.fx) this.fx=d.fx;
         if(d.dir!=null) this.dir=d.dir;
+        if(d.a) Object.assign(this.a,d.a);
       }
       else if(d.type==='crash'){
         if(!this.engaged && this.crashLeft<=0){ this.anchor=this.w; this.resetCycle(); }
@@ -168,36 +175,41 @@ class PortFX extends AudioWorkletProcessor{
     };
   }
   resetCycle(){
-    this.pos=0; this.driftMul=1; this.cycGain=1; this.lpC=1; this.cycOn=true;
+    this.pos=0; this.driftMul=1; this.cycGain=1; this.lpC=1; this.cycOn=true; this.jOff=0; this.cycDir=1;
     this.grains.forEach((g,k)=>{ g.G=0; g.g=0; g.stagger=k/3; });
   }
   newCycle(){
     this.size=this.targetSize;
-    const a=this.amt, fx=this.fx;
-    if(fx.drift&&a>0.01){
+    const a=this.a, S=this.size;
+    if(a.drift>0.01){
       const d=this.dir===0?(Math.random()<0.5?-1:1):this.dir;
-      this.driftMul*=Math.pow(2,d*a*3/12);
+      this.driftMul*=Math.pow(2,d*a.drift*3/12);
       if(this.driftMul<0.125||this.driftMul>8) this.driftMul=1;
     } else this.driftMul=1;
-    if(fx.decay&&a>0.01){ this.cycGain*=1-a*0.45; this.lpC=Math.max(0.015,this.lpC*(1-a*0.3)); }
+    if(a.decay>0.01){ this.cycGain*=1-a.decay*0.45; this.lpC=Math.max(0.015,this.lpC*(1-a.decay*0.3)); }
     else { this.cycGain=1; this.lpC=1; }
-    this.cycOn=!(fx.density&&a>0.01)||Math.random()>a*0.85;
+    this.cycOn=a.density<=0.01||Math.random()>a.density*0.85;
+    this.jOff=a.jitter>0.01?Math.floor(Math.random()*Math.min(this.N/4-S,S*a.jitter*6+sampleRate*a.jitter*a.jitter*1.5)):0;
+    this.cycDir=(a.reverse>0.01&&Math.random()<a.reverse*0.9)?-1:1;
   }
   rd(buf,x){ const N=this.N; const i0=Math.floor(x), fr=x-i0; const a=((i0%N)+N)%N, b=(a+1)%N; return buf[a]+(buf[b]-buf[a])*fr; }
   process(inputs,outputs){
     const inp=inputs[0];
     const iL=inp&&inp[0]?inp[0]:null, iR=inp&&inp[1]?inp[1]:iL;
     const oL=outputs[0][0], oR=outputs[0][1]||oL;
-    const n=oL.length, F=this.fade, N=this.N;
+    const n=oL.length, F=this.fade, N=this.N, A=this.a;
+    const tapeT=A.tape<0?1:Math.pow(2,(A.tape-0.5)*4);
+    const ringW=Math.min(1,A.ring*3), ringF=30*Math.pow(64,A.ring);
     for(let i=0;i<n;i++){
       const xl=iL?iL[i]:0, xr=iR?iR[i]:0;
       this.bL[this.w]=xl; this.bR[this.w]=xr; this.w=(this.w+1)%N;
       const crashing=this.crashLeft>0;
       const looping=this.engaged||crashing;
       this.mix+=((looping?1:0)-this.mix)*0.003;
+      this.tapeR+=(tapeT-this.tapeR)*0.0015;
       let yl=xl, yr=xr;
       if(this.mix>0.0005){
-        let rate=this.pitch*this.driftMul, S=this.size;
+        let rate=this.pitch*this.driftMul*this.tapeR*this.cycDir, S=this.size;
         if(crashing){
           if(this.crashSeg<=0){
             const o=[-1,0.5,2,-2,1,-0.5,4];
@@ -209,21 +221,26 @@ class PortFX extends AudioWorkletProcessor{
           rate*=this.crashRate; S=Math.max(64,Math.floor(S*this.crashMul));
         }
         if(this.pos>=S) this.pos%=S;
-        const p=this.pos, base=this.anchor-S;
+        const p=this.pos, base=this.anchor-S-this.jOff;
         const env=Math.min(1,p/F,(S-p)/F);
         let ll=this.rd(this.bL,base+p)*env, rr=this.rd(this.bR,base+p)*env;
-        const a=this.amt;
-        if(this.fx.smear&&a>0.01){
-          const G=Math.min(sampleRate*0.4,Math.max(sampleRate*0.02,S*(1+a*3)));
-          const R=Math.min(N/4,S*(1+a*8));
+        if(A.smear>0.01){
+          const sm=A.smear;
+          const G=Math.min(sampleRate*0.4,Math.max(sampleRate*0.02,S*(1+sm*3)));
+          const R=Math.min(N/4,S*(1+sm*8));
           let cl=0, cr=0;
           for(const g of this.grains){
             if(g.G===0||g.g>=g.G){ g.G=G; g.g=g.stagger?G*g.stagger:0; g.stagger=0; g.o=this.anchor-G-Math.random()*R; g.p=0; }
-            const wv=Math.sin(Math.PI*g.g/g.G); const w2=wv*wv;
+            const wv=Math.sin(Math.PI*g.g/g.G), w2=wv*wv;
             cl+=this.rd(this.bL,g.o+g.p)*w2; cr+=this.rd(this.bR,g.o+g.p)*w2;
             g.g++; g.p+=rate;
           }
-          ll=ll*(1-a)+cl*0.7*a; rr=rr*(1-a)+cr*0.7*a;
+          ll=ll*(1-sm)+cl*0.7*sm; rr=rr*(1-sm)+cr*0.7*sm;
+        }
+        if(ringW>0.01){
+          this.ringPh+=ringF/sampleRate; if(this.ringPh>1) this.ringPh-=1;
+          const m=1-ringW+ringW*Math.sin(6.283185307*this.ringPh);
+          ll*=m; rr*=m;
         }
         if(this.lpC<1){ this.lpL+=(ll-this.lpL)*this.lpC; this.lpR+=(rr-this.lpR)*this.lpC; ll=this.lpL; rr=this.lpR; }
         else { this.lpL=ll; this.lpR=rr; }
@@ -279,9 +296,9 @@ registerProcessor('port-rec',PortRec);
 /* ============ state ============ */
 const $=s=>document.querySelector(s);
 const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
-let ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
+let echoSend=null,echoDelay,echoLP,echoFb,ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
 const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,cut:1,res:0.15,
-  fx:{drift:true,decay:false,density:false,smear:false},dir:-1,lastPad:0};
+  assign:{size:'x',drift:'y'},dir:-1,lastPad:0};
 const pads=new Array(8).fill(null), padEls=[];
 let kitName='';
 let recT0=0,recChunks=[[],[]],recFrames=0,recLog=null,take=null;
@@ -308,13 +325,17 @@ async function start(){
   limiter=ctx.createDynamicsCompressor();
   limiter.threshold.value=-6; limiter.knee.value=0; limiter.ratio.value=20; limiter.attack.value=0.002; limiter.release.value=0.12;
   padBus.connect(fx); fx.connect(filt); filt.connect(limiter); limiter.connect(ctx.destination);
+  echoSend=ctx.createGain(); echoSend.gain.value=0; echoDelay=ctx.createDelay(2); echoDelay.delayTime.value=0.36;
+  echoLP=ctx.createBiquadFilter(); echoLP.type='lowpass'; echoLP.frequency.value=2600; echoLP.Q.value=0.5;
+  echoFb=ctx.createGain(); echoFb.gain.value=0;
+  filt.connect(echoSend); echoSend.connect(echoDelay); echoDelay.connect(echoLP); echoLP.connect(echoFb); echoFb.connect(echoDelay); echoLP.connect(limiter);
   recNode=new AudioWorkletNode(ctx,'port-rec',{numberOfInputs:2,numberOfOutputs:1,outputChannelCount:[1]});
   padBus.connect(recNode,0,0); limiter.connect(recNode,0,1); recNode.connect(ctx.destination);
   recNode.port.onmessage=onRecMsg;
   buildPadsUI();
   const kp=new URLSearchParams(location.search).get('kit');
   let ok=false;
-  if(kp){ try{ await loadKitURL(kp); ok=true; }catch(e){ toast('kit load failed → demo'); } }
+  if(kp){ try{ await loadKitURL(kp); ok=true; kitPath=kp; }catch(e){ toast('kit load failed → demo'); } }
   if(!ok) buildDemoKit();
   sendParams(); applyFilter();
   $('#start').style.display='none';
@@ -381,18 +402,23 @@ function buildDemoKit(){
 async function loadKitURL(url){
   const r=await fetch(url); if(!r.ok) throw new Error(r.status);
   const j=await r.json(); const base=new URL(url,location.href);
+  const bufs=await Promise.all([...Array(8)].map(async(_,i)=>{
+    const d=j.pads&&j.pads[i]; if(!d||!d.file) return null;
+    try{ const rr=await fetch(new URL(d.file,base)); if(!rr.ok) throw 0; return normalize(await decode(await rr.arrayBuffer())); }
+    catch(e){ return 'err'; }
+  }));
+  const miss=[];
   for(let i=0;i<8;i++){
-    const d=j.pads&&j.pads[i];
-    if(!d){ setPad(i,null); continue; }
-    const ab=await (await fetch(new URL(d.file,base))).arrayBuffer();
-    const buf=normalize(await decode(ab));
+    const d=j.pads&&j.pads[i], buf=bufs[i];
+    if(!d||!buf||buf==='err'){ if(buf==='err') miss.push(d.file); setPad(i,null); continue; }
     setPad(i,{name:d.name||stem(d.file),buf,mode:d.mode||'one',gain:d.gain??0.7,seam:d.seamless!==false,
       tr:d.transpose||0,rev:!!d.reverse,start:d.start??0,end:d.end??1,file:d.file});
   }
   setKitName(j.name||stem(url));
+  if(miss.length) toast('missing: '+miss.join(', '),5000); else toast((j.name||'kit')+' loaded');
 }
 const stem=f=>String(f).split('/').pop().replace(/\.[^.]+$/,'').slice(0,14);
-function setKitName(n){kitName=n;$('#kitname').textContent=n;}
+function setKitName(n){kitName=n;$('#kitname').textContent=n+' ▾';}
 
 /* ============ pads ============ */
 function buildPadsUI(){
@@ -537,25 +563,40 @@ $('#file').addEventListener('change',async e=>{
 });
 
 /* ============ fx params ============ */
-const sizeMs=()=>600*Math.pow(12/600,S.x);
-const fxNames=()=>Object.keys(S.fx).filter(k=>S.fx[k]);
+const FX=[
+  ['size','loop length'],['drift','pitch walks each repeat'],['tape','loop speed ±2 oct'],['reverse','chance of backwards repeats'],
+  ['jitter','jumps to earlier spots'],['density','drops repeats'],['decay','repeats fade and darken'],['smear','dissolves into grains'],
+  ['ring','metallic ring mod'],['filter','lowpass sweep (over tilt)'],['echo','dub echo throws']];
+const WK=['drift','decay','density','smear','jitter','reverse','tape','ring'];
+const ax=n=>S.assign[n]==='x'?S.x:S.assign[n]==='y'?S.y:null;
+const sizeMs=()=>{ const v=ax('size'); return v==null?120:600*Math.pow(12/600,v); };
+const effCut=()=>{ const v=ax('filter'); return v!=null?v:(S.tilt?S.cut:1); };
 function sendParams(){
   if(!fx) return;
-  fx.port.postMessage({type:'set',size:sizeMs(),amt:S.y,pitch:S.pitch,fx:{...S.fx},dir:S.dir});
+  const a={}; WK.forEach(k=>{ const v=ax(k); a[k]=v==null?(k==='tape'?-1:0):v; });
+  fx.port.postMessage({type:'set',size:sizeMs(),pitch:S.pitch,dir:S.dir,a});
+  applyFilter(); applyEcho();
   logGesture(); dirty=true;
+}
+function applyEcho(){
+  if(!echoSend) return;
+  const v=ax('echo'), t=ctx.currentTime;
+  echoSend.gain.setTargetAtTime(v!=null&&S.engaged?v*0.9:0,t,0.02);
+  echoFb.gain.setTargetAtTime(v!=null?v*0.82:0,t,0.05);
+  echoDelay.delayTime.setTargetAtTime(clamp(sizeMs()*3/1000,0.06,1.5),t,0.08);
 }
 function engage(){
   if(S.engaged) fx.port.postMessage({type:'recapture'});
   else fx.port.postMessage({type:'engage'});
-  S.engaged=true; $('#xy').classList.add('active'); logGesture(true);
+  S.engaged=true; $('#xy').classList.add('active'); applyEcho(); logGesture(true);
 }
 function release(){
-  fx.port.postMessage({type:'release'}); S.engaged=false; $('#xy').classList.remove('active'); logGesture(true);
+  fx.port.postMessage({type:'release'}); S.engaged=false; $('#xy').classList.remove('active'); applyEcho(); logGesture(true);
 }
 function applyFilter(){
   if(!filt) return;
   const t=ctx.currentTime;
-  filt.frequency.setTargetAtTime(80*Math.pow(18000/80,S.cut),t,0.03);
+  filt.frequency.setTargetAtTime(80*Math.pow(18000/80,effCut()),t,0.03);
   filt.Q.setTargetAtTime(0.7+S.res*13,t,0.05);
 }
 
@@ -616,10 +657,11 @@ function draw(){
   g.beginPath(); g.arc(px,py,10,0,Math.PI*2);
   if(S.engaged){g.fillStyle=`rgb(${col})`;g.fill();}else{g.strokeStyle=`rgb(${col})`;g.lineWidth=1.5;g.stroke();}
   g.fillStyle='rgba(236,233,226,.75)'; g.font='11px ui-rounded,system-ui,sans-serif';
-  g.fillText(`size ${sizeMs().toFixed(0)}ms`,10,18);
-  const fn=fxNames(); g.fillText(fn.length?`${fn.join(' · ')} ${(S.y*100).toFixed(0)}%`:'y: no fx',10,33);
+  const axl=k=>{ const n=FX.map(f=>f[0]).filter(f=>S.assign[f]===k); return n.length?n.map(f=>f==='size'?`size ${sizeMs().toFixed(0)}ms`:f).join(' · '):'—'; };
+  g.fillText(`x: ${axl('x')}`,10,18);
+  g.fillText(`y: ${axl('y')}  ${(S.y*100).toFixed(0)}%`,10,33);
   if(S.pitch!==1) g.fillText(S.pitch>1?'+12':'−12',10,48);
-  if(S.tilt) g.fillText(`filter ${(80*Math.pow(18000/80,S.cut)).toFixed(0)}Hz`,w-110,18);
+  if(S.tilt||ax('filter')!=null) g.fillText(`filter ${(80*Math.pow(18000/80,effCut())).toFixed(0)}Hz`,w-110,18);
   if(S.hold) g.fillText('hold',w-40,h-10);
 }
 
@@ -684,7 +726,7 @@ function onRecMsg(e){
     if(S.rec&&recFrames/ctx.sampleRate>REC_MAX_SEC){ stopRec(); toast('rec limit reached'); }
   }else if(d.type==='done'){
     take={dry:concat(recChunks[0]),wet:concat(recChunks[1]),sr:ctx.sampleRate,log:recLog,date:new Date(),kit:kitName,
-      fx:{on:fxNames(),dir:S.dir},
+      fx:{assign:{...S.assign},driftDir:S.dir},
       pads:pads.map(p=>p&&{name:p.name,file:p.file||null,mode:p.mode,gain:+p.gain.toFixed(2),transpose:p.tr,reverse:p.rev,start:+p.start.toFixed(4),end:+p.end.toFixed(4),seamless:p.seam})};
     recChunks=[[],[]];
     $('#bExp').disabled=false;
@@ -771,7 +813,7 @@ function buildTakeZip(tk){
   });
   files.push({name:'gesture.mid',data:midi(tk.log.gesture)});
   const meta={app:'port',version:'0.1',sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
-    midiMap:{74:'x / size',71:'y / fx amount',1:'tilt filter',76:'tilt reso',20:'pitch (0=-12,64=0,127=+12)',80:'stutter on'},
+    midiMap:{74:'x axis',71:'y axis',1:'tilt filter',76:'tilt reso',20:'pitch (0=-12,64=0,127=+12)',80:'stutter on'},
     fx:tk.fx,pads:tk.pads,events:tk.log.events,gesture:tk.log.gesture};
   files.push({name:'log.json',data:new TextEncoder().encode(JSON.stringify(meta))});
   return zip(files);
@@ -800,18 +842,64 @@ $('#bHold').addEventListener('click',()=>{
 $('#bTilt').addEventListener('click',toggleTilt);
 $('#bMic').addEventListener('click',()=>{ if(ctx) setMicArm(!S.micArm); });
 $('#bLoad').addEventListener('click',()=>{ if(ctx) $('#file').click(); });
-$('#bDemo').addEventListener('click',()=>{ if(ctx){ buildDemoKit(); toast('demo kit'); } });
+$('#kitname').addEventListener('click',()=>{ if(ctx){ if($('#kits').classList.contains('open')) closeSheets(); else openKits(); } });
+$('#title').addEventListener('click',()=>{ if(ctx) openKits(); });
+$('#kitRefresh').addEventListener('click',refreshKits);
+let kitPath=null, kitCache=null;
+function openKits(){ closeSheets(); $('#kits').classList.add('open'); renderKitList(kitCache); if(!kitCache) refreshKits(); }
+async function refreshKits(){ kitCache=null; renderKitList(null); try{ kitCache=await listKits(); }catch(e){ kitCache=[]; } renderKitList(kitCache); }
+async function listKits(){
+  const out=[];
+  try{
+    const r=await fetch('kits/index.json',{cache:'no-cache'});
+    if(r.ok){ const j=await r.json(); (j.kits||j).forEach(k=>out.push(typeof k==='string'?{name:k,path:`kits/${k}/kit.json`}:k)); if(out.length) return out; }
+  }catch(e){}
+  const m=location.hostname.match(/^([^.]+)\.github\.io$/i);
+  if(m){
+    const owner=m[1], seg=location.pathname.split('/').filter(Boolean);
+    const repo=seg.length&&!seg[0].includes('.')?seg[0]:`${owner}.github.io`;
+    const r=await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/kits`);
+    if(r.ok){ const j=await r.json(); j.filter(x=>x.type==='dir').forEach(d=>out.push({name:d.name,path:`kits/${d.name}/kit.json`})); }
+  }
+  return out;
+}
+function renderKitList(list){
+  const el=$('#kitList'); el.innerHTML='';
+  const add=(label,on,fn)=>{ const b=document.createElement('button'); b.className='btn'+(on?' on':''); b.textContent=label; b.onclick=fn; el.appendChild(b); };
+  add('demo',kitName==='demo',()=>{ buildDemoKit(); kitPath=null; setKitParam(null); closeSheets(); toast('demo kit'); });
+  (list||[]).forEach(k=>add(k.name,kitPath===k.path,()=>selectKit(k)));
+  $('#kitNote').textContent=list==null?'looking for kits…':list.length?`${list.length} kit${list.length>1?'s':''} found in kits/`:'no kits found · add a folder with kit.json to kits/';
+}
+async function selectKit(k){
+  toast('loading '+k.name+'…',10000);
+  try{ await loadKitURL(k.path); kitPath=k.path; setKitParam(k.path); closeSheets(); }
+  catch(e){ toast('could not load '+k.name+' · check kit.json',4000); }
+}
+function setKitParam(p){ try{ const u=new URL(location.href); if(p) u.searchParams.set('kit',p); else u.searchParams.delete('kit'); history.replaceState(null,'',u); }catch(e){} }
 $('#bFx').addEventListener('click',()=>{ if(!ctx) return; const o=!$('#fxs').classList.contains('open'); closeSheets(); if(o){ $('#fxs').classList.add('open'); renderFx(); } });
 $('#bEdit').addEventListener('click',()=>{ if(!ctx) return; if(edOpen()) closeSheets(); else openEditor(S.lastPad); });
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeSheets));
 function closeSheets(){ document.querySelectorAll('.sheet').forEach(x=>x.classList.remove('open')); $('#bFx').classList.remove('on'); $('#bEdit').classList.remove('on'); }
 
 /* fx sheet */
-document.querySelectorAll('[data-fx]').forEach(b=>b.addEventListener('click',()=>{ const k=b.dataset.fx; S.fx[k]=!S.fx[k]; renderFx(); sendParams(); }));
+(function(){
+  const box=$('#fxRows');
+  FX.forEach(([k,ds])=>{
+    const r=document.createElement('div'); r.className='fxr';
+    r.innerHTML=`<div><div class="nm">${k}</div><div class="ds">${ds}</div></div>`+['off','x','y'].map(v=>`<button class="btn" data-k="${k}" data-v="${v}">${v}</button>`).join('');
+    box.appendChild(r);
+  });
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-k]'); if(!b) return;
+    const k=b.dataset.k, v=b.dataset.v;
+    if(v==='off') delete S.assign[k]; else S.assign[k]=v;
+    renderFx(); sendParams();
+  });
+})();
 document.querySelectorAll('[data-dir]').forEach(b=>b.addEventListener('click',()=>{ S.dir=+b.dataset.dir; renderFx(); sendParams(); }));
 function renderFx(){
   $('#bFx').classList.add('on');
-  document.querySelectorAll('[data-fx]').forEach(b=>b.classList.toggle('on',!!S.fx[b.dataset.fx]));
+  document.querySelectorAll('#fxRows button').forEach(b=>b.classList.toggle('on',(S.assign[b.dataset.k]||'off')===b.dataset.v));
   document.querySelectorAll('[data-dir]').forEach(b=>b.classList.toggle('on',+b.dataset.dir===S.dir));
 }
 
