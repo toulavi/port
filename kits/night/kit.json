@@ -1,8 +1,7 @@
 {
   "name": "night",
   "pads": [
-    {"file": "hana-joined.wav",  "mode": "loop", "seamless": true "name": "joined"},
-    {"file": "joied3.wav",  "mode": "loop", "seamless": true "name": "joined"},
-    null,
+    {"file": "hana-joined.wav", "mode": "loop", "seamless": true, "name": "hanajoin"},
+    {"file": "joined3.wav", "mode": "loop", "seamless": true, "name": "joined 3"}
   ]
 }
