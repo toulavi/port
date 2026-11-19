@@ -1,10 +1,8 @@
 {
   "name": "night",
   "pads": [
-    {"file": "drone.m4a", "mode": "loop", "gain": 0.5},
-    {"file": "hiss.wav",  "mode": "loop", "gain": 0.3, "seamless": false},
-    {"file": "tick.wav",  "name": "tk"},
+    {"file": "hana-joined.wav",  "mode": "loop", "seamless": true "name": "joined"},
+    {"file": "joied3.wav",  "mode": "loop", "seamless": true "name": "joined"},
     null,
-    {"file": "glass.mp3", "gain": 0.6}
   ]
 }
