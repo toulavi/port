@@ -37,6 +37,13 @@ html,body{-webkit-text-size-adjust:100%;text-size-adjust:100%;margin:0;height:10
 .pad.latched{background:var(--fg);color:var(--bg)}
 .pad.armed{border-color:var(--ac);color:var(--ac)}
 .pad.capturing{background:var(--ac);border-color:var(--ac);color:var(--bg)}
+#looper{display:grid;grid-template-columns:64px 1fr 56px 56px;gap:6px;align-items:center}
+#looper .btn{min-width:0;padding:0}
+#lpBar{height:40px;border:1.5px solid var(--fg);border-radius:10px;position:relative;overflow:hidden;font-size:11px;display:flex;align-items:center;padding:0 10px;font-variant-numeric:tabular-nums}
+#lpFill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--dim)}
+#lpTxt{position:relative;opacity:.8;white-space:nowrap}
+#bLoop.rec{background:var(--ac);border-color:var(--ac);color:var(--bg);-webkit-text-fill-color:var(--bg)}
+#bLoop.dub{border-color:var(--ac);color:var(--ac);-webkit-text-fill-color:var(--ac)}
 #xy{flex:1;min-height:150px;border:1.5px solid var(--fg);border-radius:14px;position:relative;overflow:hidden;touch-action:none}
 #xy.active{border-color:var(--ac)}
 #xy canvas{position:absolute;inset:0;width:100%;height:100%}
@@ -96,6 +103,12 @@ input.red::-moz-range-thumb{background:var(--ac)}
     <button class="btn" id="bExp" disabled>exp</button>
   </div>
   <div id="pads"></div>
+  <div id="looper">
+    <button class="btn" id="bLoop">loop</button>
+    <div id="lpBar"><div id="lpFill"></div><span id="lpTxt">tap loop to record a pattern</span></div>
+    <button class="btn" id="bUndo">undo</button>
+    <button class="btn" id="bClear">clear</button>
+  </div>
   <div id="xy"><canvas id="cv"></canvas></div>
   <div id="foot">
     <button class="btn" id="bHold">hold</button>
@@ -111,7 +124,8 @@ input.red::-moz-range-thumb{background:var(--ac)}
   <p>pads: tap to play · loop pads latch · tap kit name to switch kits<br>xy: touch to stutter · fx: assign effects to x / y<br>2 fingers: spread +12 / pinch −12<br>tilt: filter · shake: crash<br>rec → exp: dry / wet / gesture.mid</p>
   <button class="btn" id="bStart">tap to start</button>
   <p id="startMsg" style="color:#ff3b2f;opacity:1;min-height:1.2em"></p>
-  <p>use wired out for sessions · keys 1–8, c = crash on desktop</p>
+  <p>use wired out for sessions · keys 1–8, c = crash, l = loop on desktop</p>
+  <p id="verStart"></p>
 </div>
 <div class="sheet" id="fxs">
   <div class="hd"><div class="t">fx</div><button class="btn" data-close>close</button></div>
@@ -133,8 +147,9 @@ input.red::-moz-range-thumb{background:var(--ac)}
   <div class="grid2" id="driveList"></div>
   <div class="lbl" id="driveNote"></div>
   <div class="grid2"><button class="btn" id="kitOffline">save all offline</button><button class="btn" id="kitToGh">save to github</button></div>
-  <div class="grid2"><button class="btn" id="kitDrive">drive settings</button></div>
+  <div class="grid2"><button class="btn" id="kitDrive">drive settings</button><button class="btn" id="kitDriveLogin" style="display:none">drive log in</button></div>
   <div class="lbl" id="offNote"></div>
+  <div class="lbl" id="verKits" style="text-align:right"></div>
 </div>
 <div class="sheet" id="editor">
   <div class="hd">
@@ -190,6 +205,7 @@ input.red::-moz-range-thumb{background:var(--ac)}
 <div id="toast"></div>
 
 <script>
+const APP_VERSION='0.8.1';
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
 class PortFX extends AudioWorkletProcessor{
@@ -361,6 +377,8 @@ function toast(m,ms=2400){const t=$('#toast');t.textContent=m;t.classList.add('s
 /* ============ start ============ */
 $('#bStart').addEventListener('click',start);
 let starting=false, started=false;
+$('#verStart').textContent='v'+APP_VERSION;
+$('#verKits').textContent='port v'+APP_VERSION;
 function startMsg(m){ $('#startMsg').textContent=m||''; }
 async function start(){
   if(starting||started) return; starting=true;
@@ -536,16 +554,17 @@ function rebuild(p){
   p.buf=nb;
 }
 const rateOf=p=>Math.pow(2,(p.tr||0)/12);
-function startLoop(p){
-  const t=ctx.currentTime;
+function startLoop(p,at){
+  const t=Math.max(ctx.currentTime,at||0);
   const s=ctx.createBufferSource(); s.buffer=p.buf; s.loop=true; s.playbackRate.value=rateOf(p);
   const g=ctx.createGain(); g.gain.value=0; g.gain.setTargetAtTime(p.gain,t,0.01);
-  s.connect(g).connect(padBus); s.start(); p.src=s; p.g=g;
+  s.connect(g).connect(padBus); s.start(t); p.src=s; p.g=g;
 }
-function stopLoop(p){
+function stopLoop(p,at){
   if(!p.src) return;
-  const t=ctx.currentTime; p.g.gain.setTargetAtTime(0,t,0.02); p.src.stop(t+0.2); p.src=null; p.g=null;
+  const t=Math.max(ctx.currentTime,at||0); p.g.gain.setTargetAtTime(0,t,0.02); p.src.stop(t+0.2); p.src=null; p.g=null;
 }
+const atUI=(at,fn)=>{ const d=at?(at-ctx.currentTime)*1000:0; if(d>4) setTimeout(fn,d); else fn(); };
 function renderPad(i){
   const p=pads[i],el=padEls[i]; if(!el) return;
   el.classList.toggle('empty',!p);
@@ -558,20 +577,22 @@ function flash(i,col){
   const el=padEls[i]; if(!el) return;
   el.animate([{background:col||'#ece9e2'},{background:'transparent'}],{duration:180,easing:'ease-out'});
 }
-function hitPad(i){
-  const p=pads[i]; S.lastPad=i; if(edOpen()&&edI!==i){ edI=i; renderEditor(); } if(!p){ return; }
+function hitPad(i,at,fromLoop){
+  const p=pads[i];
+  if(!fromLoop){ S.lastPad=i; if(edOpen()&&edI!==i){ edI=i; renderEditor(); } lpCapture({type:'pad',i}); }
+  if(!p){ return; }
   if(p.mode==='loop'){
-    if(p.src) stopLoop(p); else startLoop(p);
-    renderPad(i);
+    if(p.src) stopLoop(p,at); else startLoop(p,at);
+    atUI(at,()=>renderPad(i));
   }else{
     const s=ctx.createBufferSource(); s.buffer=p.buf; s.playbackRate.value=rateOf(p);
     const g=ctx.createGain(); g.gain.value=p.gain;
-    s.connect(g).connect(padBus); s.start();
+    s.connect(g).connect(padBus); s.start(Math.max(ctx.currentTime,at||0));
     p.voices.push(s); s.onended=()=>{p.voices=p.voices.filter(v=>v!==s);};
     if(p.voices.length>6){ try{p.voices.shift().stop();}catch(e){} }
-    flash(i);
+    atUI(at,()=>flash(i));
   }
-  logEvent({type:'pad',pad:i,name:p.name,state:p.mode==='loop'?(p.src?'on':'off'):'hit'});
+  logEvent({type:'pad',pad:i,name:p.name,state:p.mode==='loop'?(p.src?'on':'off'):'hit',loop:fromLoop?1:undefined},at);
 }
 
 /* ============ mic sampling ============ */
@@ -692,7 +713,7 @@ xy.addEventListener('pointerdown',e=>{
   e.preventDefault(); if(!ctx) return;
   try{xy.setPointerCapture(e.pointerId);}catch(_){}
   ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
-  if(ptrs.size===1) engage();
+  if(ptrs.size===1){ engage(); lpCapture({type:'xy',x:S.x,y:S.y,on:1,start:1}); }
   if(ptrs.size===2) twoD0=Math.max(10,dist());
 });
 xy.addEventListener('pointermove',e=>{
@@ -702,6 +723,7 @@ xy.addEventListener('pointermove',e=>{
     S.x=clamp(S.x+(e.clientX-p.x)/r.width*1.1);
     S.y=clamp(S.y-(e.clientY-p.y)/r.height*1.1);
     trail.push({x:S.x,y:S.y,t:performance.now()});
+    const n=performance.now(); if(n-(lpMoveT||0)>25){ lpMoveT=n; lpCapture({type:'xy',x:S.x,y:S.y,on:1}); }
   }
   p.x=e.clientX; p.y=e.clientY;
   if(ptrs.size===2){
@@ -715,13 +737,13 @@ function ptrUp(e){
   if(!ptrs.has(e.pointerId)) return;
   ptrs.delete(e.pointerId);
   if(ptrs.size<2&&S.pitch!==1){ S.pitch=1; sendParams(); }
-  if(ptrs.size===0&&!S.hold) release();
+  if(ptrs.size===0){ lpCapture({type:'xy',x:S.x,y:S.y,on:0}); if(!S.hold) release(); }
 }
 xy.addEventListener('pointerup',ptrUp); xy.addEventListener('pointercancel',ptrUp);
 
 function draw(){
   requestAnimationFrame(draw);
-  updStatus();
+  updStatus(); drawLooper();
   const now=performance.now();
   while(trail.length&&now-trail[0].t>1400) trail.shift();
   if(!dirty&&!trail.length) return;
@@ -750,6 +772,92 @@ function draw(){
   if(S.hold) g.fillText('hold',w-40,h-10);
 }
 
+/* ============ pattern looper ============ */
+const LP={state:'idle',layers:[],cur:null,len:0,t0:0,until:0,timer:null};
+let lpMoveT=0;
+function lpCapture(ev){
+  if(!ctx) return;
+  const now=ctx.currentTime;
+  if(LP.state==='rec'){ ev.t=now-LP.t0; LP.cur.push(ev); }
+  else if(LP.state==='dub'){ ev.t=((now-LP.t0)%LP.len+LP.len)%LP.len; LP.cur.push(ev); }
+}
+function applyXY(ev){
+  if(ptrs.size>0) return;                 // a finger on the pad wins
+  S.x=ev.x; S.y=ev.y; trail.push({x:S.x,y:S.y,t:performance.now()});
+  if(ev.start) engage();
+  else if(ev.on&&!S.engaged) engage();
+  else if(!ev.on&&S.engaged&&!S.hold) release();
+  sendParams();
+}
+function lpTick(){
+  if(LP.state!=='play'&&LP.state!=='dub') return;
+  const now=ctx.currentTime, from=Math.max(LP.until,now), to=now+0.12, L=LP.len;
+  for(const layer of LP.layers) for(const ev of layer){
+    let k=Math.ceil((from-LP.t0-ev.t)/L);
+    for(let at=LP.t0+k*L+ev.t; at<to; at+=L){
+      if(at<from) continue;
+      if(ev.type==='pad') hitPad(ev.i,at,true);
+      else if(ev.type==='xy') atUI(at,()=>applyXY(ev));
+      else if(ev.type==='crash') atUI(at,()=>crash(true));
+    }
+  }
+  LP.until=to;
+}
+function lpSet(state){
+  LP.state=state;
+  const b=$('#bLoop'); b.classList.remove('rec','dub','on');
+  b.textContent=state==='idle'?'loop':state==='rec'?'rec':state==='play'?'dub':'dub';
+  if(state==='rec') b.classList.add('rec');
+  if(state==='play') b.classList.add('on');
+  if(state==='dub') b.classList.add('dub','on');
+  clearInterval(LP.timer); LP.timer=null;
+  if(state==='play'||state==='dub') LP.timer=setInterval(lpTick,25);
+  updLooper();
+}
+function lpButton(){
+  if(!ctx) return;
+  const now=ctx.currentTime;
+  if(LP.state==='idle'){ LP.cur=[]; LP.layers=[LP.cur]; LP.t0=now; lpSet('rec'); if(ptrs.size) LP.cur.push({type:'xy',x:S.x,y:S.y,on:1,start:1,t:0}); }
+  else if(LP.state==='rec'){
+    LP.len=Math.max(0.15,now-LP.t0);
+    if(!LP.cur.length){ lpClear(); toast('nothing recorded'); return; }
+    if(ptrs.size||S.engaged) LP.cur.push({type:'xy',x:S.x,y:S.y,on:0,t:LP.len-0.002});
+    LP.until=now; lpSet('play'); lpTick();
+  }
+  else if(LP.state==='play'){ LP.cur=[]; LP.layers.push(LP.cur); lpSet('dub'); }
+  else if(LP.state==='dub'){ if(!LP.cur.length) LP.layers.pop(); lpSet('play'); }
+}
+function lpUndo(){
+  if(LP.state==='idle') return;
+  if(LP.state==='rec'){ lpClear(); return; }
+  if(LP.state==='dub'){
+    if(LP.cur.length){ LP.cur.length=0; updLooper(); toast('undo'); return; }   // wipe what this overdub added
+    if(LP.layers.length>2){ LP.layers.splice(LP.layers.length-2,1); updLooper(); toast('undo'); return; }
+    lpClear(); toast('loop cleared'); return;
+  }
+  if(LP.layers.length>1){ LP.layers.pop(); updLooper(); toast('undo'); } else { lpClear(); toast('loop cleared'); }
+}
+function lpClear(){
+  lpSet('idle'); LP.layers=[]; LP.cur=null; LP.len=0;
+  if(S.engaged&&ptrs.size===0&&!S.hold) release();
+}
+function updLooper(){
+  const t=$('#lpTxt'); if(!ctx) return;
+  const n=LP.layers.filter(l=>l.length).length;
+  if(LP.state==='idle') t.textContent='tap loop to record a pattern';
+  else if(LP.state==='rec') t.textContent='recording · tap loop to close';
+  else t.textContent=`${LP.len.toFixed(2)}s · ${n} layer${n===1?'':'s'}${LP.state==='dub'?' · overdub':''}`;
+}
+function drawLooper(){
+  const f=$('#lpFill');
+  if(LP.state==='play'||LP.state==='dub'){ const ph=((ctx.currentTime-LP.t0)%LP.len+LP.len)%LP.len/LP.len; f.style.width=(ph*100).toFixed(1)+'%'; f.style.background=LP.state==='dub'?'rgba(255,59,47,.35)':'rgba(236,233,226,.18)'; }
+  else if(LP.state==='rec'){ f.style.width='100%'; f.style.background='rgba(255,59,47,.18)'; $('#lpTxt').textContent=`recording ${(ctx.currentTime-LP.t0).toFixed(1)}s · tap loop to close`; }
+  else f.style.width='0';
+}
+$('#bLoop').addEventListener('pointerdown',e=>{ e.preventDefault(); lpButton(); });
+$('#bUndo').addEventListener('click',()=>{ if(ctx) lpUndo(); });
+$('#bClear').addEventListener('click',()=>{ if(ctx){ lpClear(); toast('loop cleared'); } });
+
 /* ============ tilt / shake ============ */
 let lastCrash=0, gotOri=false;
 function onOri(e){
@@ -764,8 +872,9 @@ function onMot(e){
   const m=Math.hypot(a.x,a.y,a.z), now=performance.now();
   if(m>22&&now-lastCrash>600){ lastCrash=now; crash(); }
 }
-function crash(){
+function crash(fromLoop){
   if(!fx) return;
+  if(fromLoop!==true) lpCapture({type:'crash'});
   fx.port.postMessage({type:'crash'});
   xy.animate([{borderColor:'#ff3b2f'},{borderColor:S.engaged?'#ff3b2f':'#ece9e2'}],{duration:700});
   logEvent({type:'crash'});
@@ -788,7 +897,7 @@ async function toggleTilt(){
 }
 
 /* ============ recording ============ */
-function logEvent(ev){ if(!S.rec) return; ev.t=+(ctx.currentTime-recT0).toFixed(4); recLog.events.push(ev); }
+function logEvent(ev,at){ if(!S.rec) return; ev.t=+(Math.max(ctx.currentTime,at||0)-recT0).toFixed(4); recLog.events.push(ev); }
 function logGesture(force){
   if(!S.rec) return;
   const t=ctx.currentTime-recT0, G=recLog.gesture, last=G[G.length-1];
@@ -887,7 +996,7 @@ function buildTakeZip(tk,name){
   files.push({name:`${name}_dry.wav`,data:wav(tk.dry,sr)});
   files.push({name:`${name}_wet.wav`,data:wav(tk.wet,sr)});
   files.push({name:`${name}_gesture.mid`,data:midi(tk.log.gesture)});
-  const meta={app:'port',version:'0.7',name,sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
+  const meta={app:'port',version:APP_VERSION,name,sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
     midiMap:{74:'x axis',71:'y axis',1:'tilt left-right',76:'tilt forward-back',20:'pitch (0=-12,64=0,127=+12)',80:'stutter on'},
     fx:tk.fx,pads:tk.pads,events:tk.log.events,gesture:tk.log.gesture};
   files.push({name:`${name}_log.json`,data:new TextEncoder().encode(JSON.stringify(meta))});
@@ -1138,10 +1247,23 @@ async function dlist(q,fields='files(id,name,mimeType,modifiedTime,size)'){
 }
 async function cacheGetJSON(k){ try{ const r=await caches.match(dkey(k)); return r?await r.json():null; }catch(e){ return null; } }
 async function cachePut(k,body,type){ try{ const c=await caches.open(KITCACHE); await c.put(dkey(k),new Response(body,{headers:{'Content-Type':type||'application/octet-stream'}})); }catch(e){} }
+async function driveWho(){
+  try{ const j=await (await dapi('about',{fields:'user(emailAddress)'})).json(); const c=driveCfg(); c.email=j.user.emailAddress; driveStore(c); return c.email; }catch(e){ return null; }
+}
 async function listDriveKits(){
   const root=driveCfg().root;
-  const roots=await dlist(`name='${qesc(root)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name)');
-  if(!roots.length) throw new Error(`folder "${root}" not found in drive`);
+  let roots=await dlist(`name='${qesc(root)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name)');
+  if(!roots.length){
+    // tolerant match: case, spaces, look-alike hyphens, full-width characters
+    const norm=x=>String(x).normalize('NFKC').toLowerCase().replace(/[\s\u2010-\u2015\u2212\u30fc_-]+/g,'');
+    const top=await dlist(`'root' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name)');
+    roots=top.filter(f=>norm(f.name)===norm(root));
+    if(!roots.length){
+      const who=await driveWho();
+      const seen=top.slice(0,8).map(f=>`"${f.name}"`).join(', ')||'none';
+      throw new Error(`folder "${root}" not found · logged in as ${who||'?'} · top folders seen: ${seen}`);
+    }
+  }
   const kits=[];
   for(const r of roots){
     const subs=await dlist(`'${r.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name,modifiedTime)');
@@ -1174,9 +1296,9 @@ async function driveFile(p){
   return ab;
 }
 async function loadDriveKit(k){
-  let man=null, err=null;
+  let man=null, err=null, fromCopy=false;
   if(driveToken()&&navigator.onLine!==false){ try{ man=await driveManifest(k); }catch(e){ err=e; } }
-  if(!man) man=await cacheGetJSON(`kit/${k.id}.json`);
+  if(!man){ man=await cacheGetJSON(`kit/${k.id}.json`); fromCopy=!!man; }
   if(!man) throw err||new Error('not saved on this device · log in to drive once');
   const miss=[];
   const res=await Promise.all([...Array(8)].map(async(_,i)=>{
@@ -1191,19 +1313,25 @@ async function loadDriveKit(k){
       tr:d.transpose||0,rev:!!d.reverse,start:d.start??0,end:d.end??1,file:d.file,bytes:r.bytes});
   }
   kitPath=null; setKitParam(null); setKitName(man.name||k.name);
-  toast(miss.length?'missing: '+miss.join(', '):`${k.name} loaded from drive`,miss.length?5000:2400);
+  const why=!driveToken()?'drive login expired':navigator.onLine===false?'offline':(err?err.message:'');
+  if(miss.length) toast('missing: '+miss.join(', '),5000);
+  else if(fromCopy) toast(`${k.name}: saved copy (${why}) · log in to get drive updates`,5000);
+  else toast(`${k.name} loaded from drive (latest)`);
 }
 let driveKits=null;
 async function refreshDrive(){
   const c=driveCfg(), note=$('#driveNote');
   const cached=(await cacheGetJSON('index.json'))||[];
   if(!c.clientId){ driveKits=cached; renderDriveList(); note.textContent=cached.length?'saved drive kits · set up drive to refresh':'not set up · open drive settings'; return; }
-  if(!driveToken()){ driveKits=cached; renderDriveList(); note.textContent=(cached.length?'saved on this device · ':'')+'log in (drive settings) to see new folders'; return; }
+  if(!driveToken()){ driveKits=cached; renderDriveList(); note.textContent=(cached.length?'saved copies · ':'')+'drive login expired · tap “drive log in” to get updates'; return; }
   note.textContent='reading drive…';
   try{ driveKits=await listDriveKits(); renderDriveList(); note.textContent=driveKits.length?`${driveKits.length} folder${driveKits.length>1?'s':''} in ${c.root}`:`no folders inside ${c.root} yet`; }
   catch(e){ driveKits=cached; renderDriveList(); note.textContent=e.message; }
 }
+function updDriveLoginBtn(){ const c=driveCfg(); $('#kitDriveLogin').style.display=c.clientId&&!driveToken()?'':'none'; }
+$('#kitDriveLogin').addEventListener('click',driveLogin);
 function renderDriveList(){
+  updDriveLoginBtn();
   const el=$('#driveList'); el.innerHTML='';
   (driveKits||[]).forEach(k=>{
     const b=document.createElement('button'); b.className='btn'+(kitName===k.name&&!kitPath?' on':''); b.textContent=k.name;
@@ -1215,7 +1343,8 @@ function renderDriveList(){
 function openDriveSettings(){
   closeSheets(); const c=driveCfg();
   $('#drClient').value=c.clientId||''; $('#drRoot').value=c.root||'port-kits';
-  $('#drNote').textContent=driveToken()?`logged in · ${Math.max(0,Math.round((c.exp-Date.now())/60000))} min left`:(c.clientId?'not logged in':'paste the client id from Google Cloud');
+  $('#drNote').textContent=driveToken()?`logged in${c.email?' as '+c.email:''} · ${Math.max(0,Math.round((c.exp-Date.now())/60000))} min left`:(c.clientId?'not logged in':'paste the client id from Google Cloud');
+  if(driveToken()) driveWho().then(e=>{ if(e&&$('#drS').classList.contains('open')) $('#drNote').textContent=`logged in as ${e} · ${Math.max(0,Math.round((driveCfg().exp-Date.now())/60000))} min left`; });
   $('#drRedirect').textContent='register in Google Cloud → origin: '+location.origin+' · redirect URI: '+redirectUri();
   $('#drS').classList.add('open');
 }
@@ -1336,12 +1465,13 @@ addEventListener('keydown',e=>{
   if(!ctx||e.repeat||e.target.closest('input')) return;
   const k=parseInt(e.key,10); if(k>=1&&k<=8){ hitPad(k-1); return; }
   if(e.key==='c') crash();
+  if(e.key==='l') lpButton();
   if(e.key===' '){ e.preventDefault(); engage(); }
 });
 addEventListener('keyup',e=>{ if(ctx&&e.key===' '&&!S.hold&&!e.target.closest('input')) release(); });
 
 /* test hook */
-window.__port={S,pads,openEditor,get take(){return take;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
+window.__port={LP,lpButton,S,pads,openEditor,get take(){return take;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
 </script>
 </body>
 </html>
