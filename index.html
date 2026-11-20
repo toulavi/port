@@ -126,9 +126,14 @@ input.red::-moz-range-thumb{background:var(--ac)}
 </div>
 <div class="sheet" id="kits">
   <div class="hd"><div class="t">kits</div><button class="btn" id="kitRefresh">refresh</button><button class="btn" data-close>close</button></div>
+  <div class="lbl">site</div>
   <div class="grid2" id="kitList"></div>
   <div class="lbl" id="kitNote"></div>
+  <div class="lbl">google drive</div>
+  <div class="grid2" id="driveList"></div>
+  <div class="lbl" id="driveNote"></div>
   <div class="grid2"><button class="btn" id="kitOffline">save all offline</button><button class="btn" id="kitToGh">save to github</button></div>
+  <div class="grid2"><button class="btn" id="kitDrive">drive settings</button></div>
   <div class="lbl" id="offNote"></div>
 </div>
 <div class="sheet" id="editor">
@@ -171,6 +176,16 @@ input.red::-moz-range-thumb{background:var(--ac)}
   <input class="field" id="ghToken" type="password" placeholder="github_pat_…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
   <div class="grid3"><button class="btn" id="ghSaveCfg">save</button><button class="btn" id="ghTest">test</button><button class="btn" id="ghForget">forget</button></div>
   <div class="lbl" id="ghNote"></div>
+</div>
+<div class="sheet" id="drS">
+  <div class="hd"><div class="t">google drive</div><button class="btn" data-close>close</button></div>
+  <div class="lbl">oauth client id (from Google Cloud · ends with .apps.googleusercontent.com)</div>
+  <input class="field" id="drClient" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+  <div class="lbl">kits folder in your drive · each folder inside it = one kit</div>
+  <input class="field" id="drRoot" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="port-kits">
+  <div class="grid3"><button class="btn" id="drSave">save</button><button class="btn" id="drLogin">log in</button><button class="btn" id="drLogout">log out</button></div>
+  <div class="lbl" id="drNote"></div>
+  <div class="lbl" id="drRedirect"></div>
 </div>
 <div id="toast"></div>
 
@@ -384,6 +399,7 @@ async function start(){
   sendParams(); applyFilter();
   wake();
   requestAnimationFrame(draw);
+  if(window.__driveMsg) setTimeout(()=>toast(window.__driveMsg),400);
   ctx.onstatechange=()=>{ if(ctx.state!=='running') toast('audio paused · tap anywhere',3000); };
   const kp=new URLSearchParams(location.search).get('kit');
   if(kp){
@@ -871,7 +887,7 @@ function buildTakeZip(tk,name){
   files.push({name:`${name}_dry.wav`,data:wav(tk.dry,sr)});
   files.push({name:`${name}_wet.wav`,data:wav(tk.wet,sr)});
   files.push({name:`${name}_gesture.mid`,data:midi(tk.log.gesture)});
-  const meta={app:'port',version:'0.6',name,sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
+  const meta={app:'port',version:'0.7',name,sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
     midiMap:{74:'x axis',71:'y axis',1:'tilt left-right',76:'tilt forward-back',20:'pitch (0=-12,64=0,127=+12)',80:'stutter on'},
     fx:tk.fx,pads:tk.pads,events:tk.log.events,gesture:tk.log.gesture};
   files.push({name:`${name}_log.json`,data:new TextEncoder().encode(JSON.stringify(meta))});
@@ -918,7 +934,7 @@ $('#kitname').addEventListener('click',()=>{ if(ctx){ if($('#kits').classList.co
 $('#title').addEventListener('click',()=>{ if(ctx) openKits(); });
 $('#kitRefresh').addEventListener('click',refreshKits);
 let kitPath=null, kitCache=null;
-function openKits(){ closeSheets(); $('#kits').classList.add('open'); renderKitList(kitCache); if(!kitCache) refreshKits(); }
+function openKits(){ closeSheets(); $('#kits').classList.add('open'); renderKitList(kitCache); if(!kitCache) refreshKits(); refreshDrive(); }
 async function refreshKits(){ kitCache=null; renderKitList(null); try{ kitCache=await listKits(); }catch(e){ kitCache=[]; } renderKitList(kitCache); }
 async function listKits(){
   const out=[];
@@ -1077,6 +1093,137 @@ $('#skGo').addEventListener('click',async()=>{
   catch(e){ note('failed: '+e.message); }
   ghBusy=false;
 });
+/* ============ Google Drive (folder = kit) ============ */
+const DRIVE_SCOPE='https://www.googleapis.com/auth/drive.readonly';
+const AUDIO_RE=/\.(wav|wave|aif|aiff|mp3|m4a|aac|ogg|oga|flac|caf)$/i;
+const dkey=p=>new URL(`__drive/${p}`,location.href).href;
+function driveCfg(){ let c={}; try{ c=JSON.parse(localStorage.getItem('port.drive')||'{}'); }catch(e){} c.root=c.root||'port-kits'; return c; }
+function driveStore(c){ try{ localStorage.setItem('port.drive',JSON.stringify(c)); }catch(e){} }
+const redirectUri=()=>location.origin+location.pathname.replace(/index\.html$/,'');
+function driveToken(){ const c=driveCfg(); return c.token&&c.exp>Date.now()+30000?c.token:null; }
+function driveLogin(){
+  const c=driveCfg(); if(!c.clientId){ $('#drNote').textContent='paste the client id first'; return; }
+  const st=Math.random().toString(36).slice(2);
+  c.state=st; c.back=location.search; driveStore(c);
+  const u=new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  u.search=new URLSearchParams({client_id:c.clientId,redirect_uri:redirectUri(),response_type:'token',scope:DRIVE_SCOPE,include_granted_scopes:'true',state:st}).toString();
+  location.href=u.href;
+}
+// coming back from Google: #access_token=…
+(function(){
+  if(!location.hash||!/access_token=|error=/.test(location.hash)) return;
+  const h=new URLSearchParams(location.hash.slice(1)), c=driveCfg();
+  let msg='';
+  if(h.get('error')) msg='drive login cancelled ('+h.get('error')+')';
+  else if(h.get('state')!==c.state) msg='drive login failed (state mismatch) · try again';
+  else{ c.token=h.get('access_token'); c.exp=Date.now()+(+h.get('expires_in')||3600)*1000; msg='drive connected'; }
+  const back=c.back||''; delete c.state; delete c.back; driveStore(c);
+  try{ history.replaceState(null,'',location.pathname+back); }catch(e){}
+  window.__driveMsg=msg; $('#startMsg').textContent=msg; $('#startMsg').style.color='#ece9e2';
+})();
+async function dapi(path,params){
+  const t=driveToken(); if(!t) throw new Error('log in to drive');
+  const u=new URL('https://www.googleapis.com/drive/v3/'+path); if(params) u.search=new URLSearchParams(params).toString();
+  const r=await fetch(u,{headers:{Authorization:'Bearer '+t}});
+  if(r.status===401){ const c=driveCfg(); delete c.token; driveStore(c); throw new Error('drive login expired · log in again'); }
+  if(!r.ok){ let m=String(r.status); try{ m+=' '+(await r.json()).error.message; }catch(e){} throw new Error(m); }
+  return r;
+}
+const qesc=s=>String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+async function dlist(q,fields='files(id,name,mimeType,modifiedTime,size)'){
+  const out=[]; let pageToken='';
+  do{ const p={q,fields:'nextPageToken,'+fields,orderBy:'name',pageSize:'200',supportsAllDrives:'true',includeItemsFromAllDrives:'true'}; if(pageToken) p.pageToken=pageToken;
+      const j=await (await dapi('files',p)).json(); out.push(...j.files); pageToken=j.nextPageToken||''; }while(pageToken);
+  return out;
+}
+async function cacheGetJSON(k){ try{ const r=await caches.match(dkey(k)); return r?await r.json():null; }catch(e){ return null; } }
+async function cachePut(k,body,type){ try{ const c=await caches.open(KITCACHE); await c.put(dkey(k),new Response(body,{headers:{'Content-Type':type||'application/octet-stream'}})); }catch(e){} }
+async function listDriveKits(){
+  const root=driveCfg().root;
+  const roots=await dlist(`name='${qesc(root)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name)');
+  if(!roots.length) throw new Error(`folder "${root}" not found in drive`);
+  const kits=[];
+  for(const r of roots){
+    const subs=await dlist(`'${r.id}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,'files(id,name,modifiedTime)');
+    subs.forEach(f=>kits.push({id:f.id,name:f.name}));
+  }
+  await cachePut('index.json',JSON.stringify(kits),'application/json');
+  return kits;
+}
+async function driveManifest(k){
+  const files=await dlist(`'${k.id}' in parents and trashed=false`);
+  const audio=files.filter(f=>AUDIO_RE.test(f.name)||String(f.mimeType).startsWith('audio/'));
+  const byName=new Map(audio.map(f=>[f.name,f]));
+  let pads, kjName=null;
+  const kj=files.find(f=>f.name==='kit.json');
+  if(kj){
+    const j=await (await dapi('files/'+kj.id,{alt:'media'})).json(); kjName=j.name||null;
+    pads=(j.pads||[]).slice(0,8).map(d=>{ if(!d||!d.file) return null; const f=byName.get(d.file); return f?{...d,id:f.id,v:f.modifiedTime}:{...d,missing:true}; });
+  }else{
+    pads=audio.slice(0,8).map(f=>({file:f.name,id:f.id,v:f.modifiedTime}));
+  }
+  const man={name:kjName||k.name,folder:k.id,pads};
+  await cachePut(`kit/${k.id}.json`,JSON.stringify(man),'application/json');
+  return man;
+}
+async function driveFile(p){
+  const key=`file/${p.id}/${encodeURIComponent(p.v||'')}`;
+  try{ const r=await caches.match(dkey(key)); if(r) return await r.arrayBuffer(); }catch(e){}
+  const ab=await (await dapi('files/'+p.id,{alt:'media'})).arrayBuffer();
+  await cachePut(key,ab.slice(0));
+  return ab;
+}
+async function loadDriveKit(k){
+  let man=null, err=null;
+  if(driveToken()&&navigator.onLine!==false){ try{ man=await driveManifest(k); }catch(e){ err=e; } }
+  if(!man) man=await cacheGetJSON(`kit/${k.id}.json`);
+  if(!man) throw err||new Error('not saved on this device · log in to drive once');
+  const miss=[];
+  const res=await Promise.all([...Array(8)].map(async(_,i)=>{
+    const d=man.pads[i]; if(!d||d.missing){ if(d&&d.missing) miss.push(d.file); return null; }
+    try{ const ab=await driveFile(d); const bytes=ab.slice(0); const buf=normalize(await decode(ab)); return {d,buf,bytes}; }
+    catch(e){ miss.push(d.file); return null; }
+  }));
+  for(let i=0;i<8;i++){
+    const r=res[i]; if(!r){ setPad(i,null); continue; }
+    const d=r.d, mode=d.mode||(r.buf.duration>2.5?'loop':'one');
+    setPad(i,{name:d.name||stem(d.file),buf:r.buf,mode,gain:d.gain??0.7,seam:d.seamless!==false,
+      tr:d.transpose||0,rev:!!d.reverse,start:d.start??0,end:d.end??1,file:d.file,bytes:r.bytes});
+  }
+  kitPath=null; setKitParam(null); setKitName(man.name||k.name);
+  toast(miss.length?'missing: '+miss.join(', '):`${k.name} loaded from drive`,miss.length?5000:2400);
+}
+let driveKits=null;
+async function refreshDrive(){
+  const c=driveCfg(), note=$('#driveNote');
+  const cached=(await cacheGetJSON('index.json'))||[];
+  if(!c.clientId){ driveKits=cached; renderDriveList(); note.textContent=cached.length?'saved drive kits · set up drive to refresh':'not set up · open drive settings'; return; }
+  if(!driveToken()){ driveKits=cached; renderDriveList(); note.textContent=(cached.length?'saved on this device · ':'')+'log in (drive settings) to see new folders'; return; }
+  note.textContent='reading drive…';
+  try{ driveKits=await listDriveKits(); renderDriveList(); note.textContent=driveKits.length?`${driveKits.length} folder${driveKits.length>1?'s':''} in ${c.root}`:`no folders inside ${c.root} yet`; }
+  catch(e){ driveKits=cached; renderDriveList(); note.textContent=e.message; }
+}
+function renderDriveList(){
+  const el=$('#driveList'); el.innerHTML='';
+  (driveKits||[]).forEach(k=>{
+    const b=document.createElement('button'); b.className='btn'+(kitName===k.name&&!kitPath?' on':''); b.textContent=k.name;
+    b.onclick=async()=>{ toast('loading '+k.name+'…',20000); try{ await loadDriveKit(k); closeSheets(); }catch(e){ toast(e.message,4000); } };
+    el.appendChild(b);
+    cacheGetJSON(`kit/${k.id}.json`).then(m=>{ if(m) b.textContent=k.name+' ✓'; });
+  });
+}
+function openDriveSettings(){
+  closeSheets(); const c=driveCfg();
+  $('#drClient').value=c.clientId||''; $('#drRoot').value=c.root||'port-kits';
+  $('#drNote').textContent=driveToken()?`logged in · ${Math.max(0,Math.round((c.exp-Date.now())/60000))} min left`:(c.clientId?'not logged in':'paste the client id from Google Cloud');
+  $('#drRedirect').textContent='register in Google Cloud → origin: '+location.origin+' · redirect URI: '+redirectUri();
+  $('#drS').classList.add('open');
+}
+function readDrForm(){ const c=driveCfg(); c.clientId=$('#drClient').value.trim(); c.root=$('#drRoot').value.trim()||'port-kits'; return c; }
+$('#kitDrive').addEventListener('click',openDriveSettings);
+$('#drSave').addEventListener('click',()=>{ driveStore(readDrForm()); $('#drNote').textContent='saved on this device'; });
+$('#drLogin').addEventListener('click',()=>{ driveStore(readDrForm()); driveLogin(); });
+$('#drLogout').addEventListener('click',()=>{ const c=driveCfg(); delete c.token; delete c.exp; driveStore(c); $('#drNote').textContent='logged out (saved kits stay playable)'; });
 function setKitParam(p){ try{ const u=new URL(location.href); if(p) u.searchParams.set('kit',p); else u.searchParams.delete('kit'); history.replaceState(null,'',u); }catch(e){} }
 $('#bFx').addEventListener('click',()=>{ if(!ctx) return; const o=!$('#fxs').classList.contains('open'); closeSheets(); if(o){ $('#fxs').classList.add('open'); renderFx(); } });
 $('#bEdit').addEventListener('click',()=>{ if(!ctx) return; if(edOpen()) closeSheets(); else openEditor(S.lastPad); });

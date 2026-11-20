@@ -1,5 +1,5 @@
 /* port service worker — makes the app and loaded kits work offline */
-const VERSION = 'port-0.6';
+const VERSION = 'port-0.7';
 const SHELL = VERSION + '-shell';
 const KITS = 'port-kits';           // shared with the page (save offline)
 const APIC = 'port-api';
