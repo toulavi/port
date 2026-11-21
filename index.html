@@ -252,7 +252,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.14';
+const APP_VERSION='0.14.1';
 function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
@@ -505,7 +505,7 @@ registerProcessor('port-rec',PortRec);
 const $=s=>document.querySelector(s);
 const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
 let fxB=null,loopNode=null,satIn,satShaper,satOut,satTone,micStream=null,echoSend=null,echoDelay,echoLP,echoFb,ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
-const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,tx:0.5,ty:0.5,
+const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,tx:0,ty:0,
   assign:{size:'x',drift:'y',filter:'tx',reso:'ty'},dir:-1,lastPad:0};
 const pads=new Array(8).fill(null), padEls=[];
 let kitName='';
@@ -1103,7 +1103,8 @@ $('#satAmt').addEventListener('input',e=>{ histMark('sat'); satAmt=+e.target.val
 let lastCrash=0, gotOri=false;
 function onOri(e){
   if(e.gamma==null) return; gotOri=true;
-  const tc=clamp((e.gamma+40)/80), tr=clamp((60-(e.beta??60))/60);
+  // flat on the floor = 0; the further it leans (either way) the more it acts
+  const tc=clamp(Math.abs(e.gamma)/45), tr=clamp(Math.abs(e.beta??0)/60);
   S.tx+=(tc-S.tx)*0.35; S.ty+=(tr-S.ty)*0.35;
   const now=performance.now(); if(now-(onOri._t||0)<16) return; onOri._t=now;
   sendParams();
@@ -1123,7 +1124,7 @@ function crash(fromLoop){
 async function toggleTilt(){
   if(S.tilt){
     S.tilt=false; removeEventListener('deviceorientation',onOri); removeEventListener('devicemotion',onMot);
-    S.tx=0.5; S.ty=0.5; sendParams(); $('#bTilt').classList.remove('on'); dirty=true; return;
+    S.tx=0; S.ty=0; sendParams(); $('#bTilt').classList.remove('on'); dirty=true; return;
   }
   try{
     if(typeof DeviceOrientationEvent!=='undefined'&&typeof DeviceOrientationEvent.requestPermission==='function'){
