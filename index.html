@@ -47,7 +47,7 @@ html,body{-webkit-text-size-adjust:100%;text-size-adjust:100%;margin:0;height:10
 #xy{flex:1;min-height:150px;border:1.5px solid var(--fg);border-radius:14px;position:relative;overflow:hidden;touch-action:none}
 #xy.active{border-color:var(--ac)}
 #xy canvas{position:absolute;inset:0;width:100%;height:100%}
-#foot{display:grid;grid-template-columns:44px 44px repeat(5,minmax(0,1fr));gap:6px}
+#foot{display:grid;grid-template-columns:44px 44px 1fr 64px 64px 64px;gap:6px}
 #foot .btn svg{display:block;margin:0 auto}
 #foot .btn{min-width:0;padding:0}
 #start{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:10;padding:24px;text-align:center}
@@ -80,6 +80,12 @@ input.red::-webkit-slider-thumb{background:var(--ac)}
 input.red::-moz-range-thumb{background:var(--ac)}
 #wave{width:100%;height:110px;border:1.5px solid var(--fg);border-radius:12px;touch-action:none;display:block}
 .sbtn{height:40px;width:40px;min-width:40px;padding:0}
+#takeList{display:flex;flex-direction:column;gap:6px;max-height:34dvh;overflow-y:auto}
+.trow{display:grid;grid-template-columns:44px 1fr;gap:8px;align-items:center;padding:6px;border-radius:12px;background:rgba(0,0,0,.12)}
+.trow.sel{box-shadow:inset 0 0 0 2px var(--ac);background:rgba(0,0,0,.2)}
+.trow .btn{height:40px;min-width:0;padding:0}
+.trow .tn{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow .ti{font-size:11px;opacity:.8;margin-top:2px}
 .sheet{max-height:80dvh;overflow-y:auto;touch-action:pan-y;-webkit-overflow-scrolling:touch}
 .fxr{display:grid;grid-template-columns:1fr repeat(5,38px);gap:6px;align-items:center;margin-bottom:6px}
 .fxr .nm{font-size:13px;font-weight:600}
@@ -138,7 +144,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <div id="pads"></div>
   <div id="looper">
     <button class="btn" id="bLoop">loop</button>
-    <div id="lpBar"><div id="lpFill"></div><span id="lpTxt">tap loop to record a pattern</span></div>
+    <div id="lpBar"><div id="lpFill"></div><span id="lpTxt">tap loop to record</span></div>
     <button class="btn" id="bClear">clear</button>
     <button class="btn" id="bToPad">→pad</button>
   </div>
@@ -146,10 +152,9 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <div id="foot">
     <button class="btn" id="bUndo2" aria-label="undo"><svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5L2.5 6 6 9.5"/><path d="M2.5 6H11a4.5 4.5 0 010 9H8"/></svg></button>
     <button class="btn" id="bRedo2" aria-label="redo"><svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5L15.5 6 12 9.5"/><path d="M15.5 6H7a4.5 4.5 0 000 9h3"/></svg></button>
+    <span></span>
     <button class="btn" id="bHold">hold</button>
     <button class="btn" id="bTilt">tilt</button>
-    <button class="btn" id="bMic">mic</button>
-    <button class="btn" id="bLoad">load</button>
     <button class="btn" id="bEdit">edit</button>
   </div>
 </div>
@@ -196,6 +201,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
     <button class="btn sbtn" id="edNext">›</button>
     <button class="btn" data-close>done</button>
   </div>
+  <div class="grid2"><button class="btn" id="edLoad">load file</button><button class="btn" id="edMic">sample mic</button></div>
   <canvas id="wave"></canvas>
   <div class="sl"><span class="k">transpose</span><input type="range" class="red" id="edTr" min="-24" max="24" step="1" value="0"><span class="v" id="edTrV">0</span></div>
   <div class="sl"><span class="k">gain</span><input type="range" id="edGain" min="0" max="1" step="0.01" value="0.7"><span class="v" id="edGainV">70</span></div>
@@ -208,11 +214,14 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <div class="grid3"><button class="btn" id="edReset">reset</button></div>
 </div>
 <div class="sheet" id="expS">
-  <div class="hd"><div class="t">export take</div><button class="btn" data-close>close</button></div>
+  <div class="hd"><div class="t">takes</div><button class="btn" data-close>close</button></div>
+  <div class="lbl">tap a take to select it · ▶ to listen · newest on top</div>
+  <div id="takeList"></div>
   <div class="lbl" id="expInfo"></div>
   <input class="field" id="expName" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
   <div class="lbl" id="expFiles"></div>
   <div class="grid2"><button class="btn" id="expGo">share / save</button><button class="btn" id="expReset">reset name</button></div>
+  <div class="grid2"><button class="btn" id="expDel">delete take</button></div>
 </div>
 <div class="sheet" id="skS">
   <div class="hd"><div class="t">save kit to github</div><button class="btn" data-close>close</button></div>
@@ -243,7 +252,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.12';
+const APP_VERSION='0.14';
 function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
@@ -500,7 +509,8 @@ const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,enga
   assign:{size:'x',drift:'y',filter:'tx',reso:'ty'},dir:-1,lastPad:0};
 const pads=new Array(8).fill(null), padEls=[];
 let kitName='';
-let recT0=0,recChunks=[[],[]],recFrames=0,recLog=null,take=null;
+let recT0=0,recChunks=[[],[]],recFrames=0,recLog=null,take=null,takes=[],selTake=null,takeSeq=0;
+const MAX_TAKES=8;
 const REC_MAX_SEC=240;
 let micChunks=[],micTarget=-1,micTimer=null;
 let dirty=true;
@@ -764,7 +774,7 @@ function releaseMic(){
 function micStart(i){
   if(!micNode||micTarget>=0) return;
   micTarget=i; micChunks=[]; micNode.port.postMessage('start');
-  padEls[i].classList.add('capturing');
+  padEls[i].classList.add('capturing'); updMicBtn();
   micTimer=setTimeout(micStop,8000);
 }
 function micStop(){
@@ -792,26 +802,33 @@ function onMicMsg(e){
   logEvent({type:'sample',pad:i,seconds:+(n/sr).toFixed(3)});
   toast(`sampled ${(n/sr).toFixed(1)}s → pad ${i+1}`);
 }
+function updMicBtn(){
+  const b=$('#edMic'); b.classList.toggle('armed',S.micArm&&micTarget<0); b.classList.toggle('on',micTarget>=0);
+  b.textContent=micTarget>=0?'recording…':S.micArm?'hold to record':'sample mic';
+}
 async function setMicArm(on){
   if(on && !(await ensureMic())) on=false;
   if(!on && micTarget<0) releaseMic();
-  S.micArm=on; $('#bMic').classList.toggle('armed',on);
+  S.micArm=on; updMicBtn();
   for(let i=0;i<8;i++) renderPad(i);
-  if(on) toast('hold a pad to sample (max 8s)');
+  if(on) toast('hold “hold to record” (or any pad) to sample · max 8s');
 }
 
 /* ============ load files ============ */
+let loadTarget=-1;
 $('#file').addEventListener('change',async e=>{
-  const fs=[...e.target.files].slice(0,8); if(!fs.length) return;
+  const start=loadTarget>=0?loadTarget:0;
+  const fs=[...e.target.files].slice(0,8-start); if(!fs.length) return;
   histMark();
-  for(let k=0;k<fs.length;k++){
+  for(let j=0;j<fs.length;j++){ const k=start+j;
     try{
-      const ab=await fs[k].arrayBuffer(), bytes=ab.slice(0); const buf=normalize(await decode(ab));
+      const ab=await fs[j].arrayBuffer(), bytes=ab.slice(0); const buf=normalize(await decode(ab));
       const mode=buf.duration>2.5?'loop':'one';
-      setPad(k,{name:stem(fs[k].name),buf,mode,gain:0.7,seam:true,file:fs[k].name,bytes});
-    }catch(err){ toast('could not decode '+fs[k].name); }
+      setPad(k,{name:stem(fs[j].name),buf,mode,gain:0.7,seam:true,file:fs[j].name,bytes});
+    }catch(err){ toast('could not decode '+fs[j].name); }
   }
-  setKitName('local files'); e.target.value='';
+  e.target.value=''; toast(fs.length>1?`loaded into pads ${start+1}–${start+fs.length}`:`loaded into pad ${start+1}`);
+  if(edOpen()) renderEditor();
 });
 
 /* ============ fx params ============ */
@@ -1148,8 +1165,12 @@ function onRecMsg(e){
       fx:{assign:{...S.assign},driftDir:S.dir,saturation:satAmt,depth:fxDepth},
       pads:pads.map(p=>p&&{name:p.name,file:p.file||null,mode:p.mode,gain:+p.gain.toFixed(2),transpose:p.tr,reverse:p.rev,start:+p.start.toFixed(4),end:+p.end.toFixed(4),seamless:p.seam})};
     recChunks=[[],[]];
-    $('#bExp').disabled=false;
-    toast(`take ready · ${(take.wet.length/2/take.sr).toFixed(1)}s · tap exp`);
+    take.no=++takeSeq; take.name=defaultName(take.date)+(takes.some(t=>defaultName(t.date)===defaultName(take.date))?`_${take.no}`:'');
+    takes.push(take); selTake=take;
+    if(takes.length>MAX_TAKES){ const old=takes.shift(); toast(`take ${old.no} dropped (keeps the last ${MAX_TAKES})`,3500); }
+    updExpBtn();
+    toast(`take ${take.no} · ${(take.wet.length/2/take.sr).toFixed(1)}s · tap exp`);
+    if($('#expS').classList.contains('open')) renderTakes();
   }
 }
 function updStatus(){
@@ -1226,15 +1247,48 @@ function buildTakeZip(tk,name){
   files.push({name:`${name}_log.json`,data:new TextEncoder().encode(JSON.stringify(meta))});
   return zip(files);
 }
+const tdur=t=>(t.wet.length/2/t.sr);
+const hhmm=d=>`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+function updExpBtn(){ const b=$('#bExp'); b.disabled=!takes.length; b.textContent=takes.length>1?`exp ${takes.length}`:'exp'; }
 function openExport(){
-  if(!take){ toast('no take yet'); return; }
+  if(!takes.length){ toast('no take yet'); return; }
   closeSheets(); $('#expS').classList.add('open');
-  if(!take.name) take.name=defaultName(take.date);
-  $('#expName').value=take.name; updExpFiles();
-  $('#expInfo').textContent=`${(take.wet.length/2/take.sr).toFixed(1)}s · ${take.kit} · ${take.date.toLocaleString()}`;
+  if(!selTake||!takes.includes(selTake)) selTake=takes[takes.length-1];
+  renderTakes();
 }
-function updExpFiles(){ const n=cleanName($('#expName').value)||defaultName(take.date); $('#expFiles').textContent=`${n}.zip → ${n}_dry.wav · _wet.wav · _gesture.mid · _log.json`; }
+function renderTakes(){
+  const box=$('#takeList'); box.innerHTML='';
+  [...takes].reverse().forEach(t=>{
+    const r=document.createElement('div'); r.className='trow'+(t===selTake?' sel':'');
+    const pb=document.createElement('button'); pb.className='btn'; pb.setAttribute('aria-label','listen');
+    pb.innerHTML=previewing===t?'<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><rect x="2" y="2" width="10" height="10" rx="1.5" fill="currentColor"/></svg>':'<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 1.8v10.4L12 7z" fill="currentColor"/></svg>';
+    pb.addEventListener('click',ev=>{ ev.stopPropagation(); togglePreview(t); });
+    const info=document.createElement('div');
+    info.innerHTML=`<div class="tn"></div><div class="ti"></div>`;
+    info.querySelector('.tn').textContent=`${t.no} · ${t.name}`;
+    info.querySelector('.ti').textContent=`${tdur(t).toFixed(1)}s · ${t.kit} · ${hhmm(t.date)}`;
+    r.append(pb,info);
+    r.addEventListener('click',()=>{ if(selTake!==t){ selTake=t; renderTakes(); } });
+    box.appendChild(r);
+  });
+  const t=selTake;
+  $('#expName').value=t.name; updExpFiles();
+  $('#expInfo').textContent=`selected: take ${t.no} · ${tdur(t).toFixed(1)}s · ${t.date.toLocaleString()}`;
+}
+let previewing=null, previewSrc=null;
+function stopPreview(){ if(previewSrc){ try{ previewSrc.onended=null; previewSrc.stop(); }catch(e){} } previewSrc=null; previewing=null; }
+function togglePreview(t){
+  const was=previewing; stopPreview();
+  if(was===t){ renderTakes(); return; }
+  const n=t.wet.length/2, b=ctx.createBuffer(2,n,t.sr), L=b.getChannelData(0), R=b.getChannelData(1);
+  for(let i=0;i<n;i++){ L[i]=t.wet[i*2]/32768; R[i]=t.wet[i*2+1]/32768; }
+  const s=ctx.createBufferSource(); s.buffer=b; s.connect(ctx.destination); s.start();
+  s.onended=()=>{ if(previewSrc===s){ previewSrc=null; previewing=null; if($('#expS').classList.contains('open')) renderTakes(); } };
+  previewSrc=s; previewing=t; selTake=t; renderTakes();
+}
+function updExpFiles(){ const take=selTake; if(!take) return; const n=cleanName($('#expName').value)||defaultName(take.date); $('#expFiles').textContent=`${n}.zip → ${n}_dry.wav · _wet.wav · _gesture.mid · _log.json`; }
 async function exportTake(){
+  const take=selTake;
   if(!take){ toast('no take yet'); return; }
   take.name=cleanName($('#expName').value)||defaultName(take.date);
   const blob=buildTakeZip(take,take.name), fname=`${take.name}.zip`;
@@ -1253,16 +1307,29 @@ async function exportTake(){
 $('#bRec').addEventListener('click',toggleRec);
 $('#bExp').addEventListener('click',openExport);
 $('#expGo').addEventListener('click',()=>{ $('#expName').blur(); exportTake(); });
-$('#expReset').addEventListener('click',()=>{ if(take){ $('#expName').value=defaultName(take.date); updExpFiles(); } });
-$('#expName').addEventListener('input',updExpFiles);
+$('#expReset').addEventListener('click',()=>{ if(selTake){ $('#expName').value=defaultName(selTake.date); selTake.name=cleanName($('#expName').value); updExpFiles(); renderTakes(); } });
+$('#expName').addEventListener('input',()=>{ if(selTake){ selTake.name=cleanName($('#expName').value)||defaultName(selTake.date); updExpFiles(); const r=document.querySelector('.trow.sel .tn'); if(r) r.textContent=`${selTake.no} · ${selTake.name}`; } });
+$('#expDel').addEventListener('click',()=>{
+  if(!selTake) return;
+  if(previewing===selTake) stopPreview();
+  const no=selTake.no; takes=takes.filter(t=>t!==selTake); selTake=takes[takes.length-1]||null; take=selTake;
+  updExpBtn(); toast(`take ${no} deleted`);
+  if(!takes.length){ closeSheets(); return; } renderTakes();
+});
 $('#expName').addEventListener('keydown',e=>{ if(e.key==='Enter') e.target.blur(); });
 $('#bHold').addEventListener('click',()=>{
   if(!ctx) return; S.hold=!S.hold; $('#bHold').classList.toggle('on',S.hold);
   if(!S.hold&&ptrs.size===0&&S.engaged) release(); dirty=true;
 });
 $('#bTilt').addEventListener('click',toggleTilt);
-$('#bMic').addEventListener('click',()=>{ if(ctx) setMicArm(!S.micArm); });
-$('#bLoad').addEventListener('click',()=>{ if(ctx) $('#file').click(); });
+$('#edLoad').addEventListener('click',()=>{ if(!ctx) return; loadTarget=edI; $('#file').click(); });
+$('#edMic').addEventListener('pointerdown',async e=>{
+  e.preventDefault(); if(!ctx) return;
+  if(!S.micArm){ await setMicArm(true); return; }       // first tap: get the mic ready
+  micStart(edI);                                       // then hold to record into this pad
+});
+const edMicUp=()=>{ if(micTarget>=0&&micTarget===edI) micStop(); };
+$('#edMic').addEventListener('pointerup',edMicUp); $('#edMic').addEventListener('pointercancel',edMicUp); $('#edMic').addEventListener('pointerleave',edMicUp);
 $('#kitname').addEventListener('click',()=>{ if(ctx){ if($('#kits').classList.contains('open')) closeSheets(); else openKits(); } });
 $('#title').addEventListener('click',()=>{ if(ctx) openKits(); });
 $('#kitRefresh').addEventListener('click',refreshKits);
@@ -1581,7 +1648,7 @@ function setKitParam(p){ try{ const u=new URL(location.href); if(p) u.searchPara
 $('#bFx').addEventListener('click',()=>{ if(!ctx) return; const o=!$('#fxs').classList.contains('open'); closeSheets(); if(o){ $('#fxs').classList.add('open'); renderFx(); } });
 $('#bEdit').addEventListener('click',()=>{ if(!ctx) return; if(edOpen()) closeSheets(); else openEditor(S.lastPad); });
 document.querySelectorAll('[data-close]').forEach(b=>b.addEventListener('click',closeSheets));
-function closeSheets(){ document.querySelectorAll('.sheet').forEach(x=>x.classList.remove('open')); $('#bFx').classList.remove('on'); $('#bEdit').classList.remove('on'); }
+function closeSheets(){ if(typeof stopPreview==='function') stopPreview(); if(S.micArm&&micTarget<0&&typeof setMicArm==='function') setMicArm(false); document.querySelectorAll('.sheet').forEach(x=>x.classList.remove('open')); $('#bFx').classList.remove('on'); $('#bEdit').classList.remove('on'); }
 
 /* fx sheet */
 (function(){
@@ -1697,7 +1764,7 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>{ if(ctx&&e.key===' '&&!S.hold&&!e.target.closest('input')) release(); });
 
 /* test hook */
-window.__port={H,undo,redo,get loopSrc(){return loopSrc;},LP,lpButton,S,pads,openEditor,get take(){return take;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
+window.__port={H,undo,redo,get loopSrc(){return loopSrc;},LP,lpButton,S,pads,openEditor,get take(){return take;},get takes(){return takes;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
 </script>
 </body>
 </html>
