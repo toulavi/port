@@ -37,7 +37,7 @@ html,body{-webkit-text-size-adjust:100%;text-size-adjust:100%;margin:0;height:10
 .pad.latched{background:var(--fg);color:var(--bg)}
 .pad.armed{border-color:var(--ac);color:var(--ac)}
 .pad.capturing{background:var(--ac);border-color:var(--ac);color:var(--bg)}
-#looper{display:grid;grid-template-columns:58px 1fr 52px 52px 54px;gap:6px;align-items:center}
+#looper{display:grid;grid-template-columns:58px 1fr 58px 58px;gap:6px;align-items:center}
 #looper .btn{min-width:0;padding:0}
 #lpBar{height:40px;border:1.5px solid var(--fg);border-radius:10px;position:relative;overflow:hidden;font-size:11px;display:flex;align-items:center;padding:0 10px;font-variant-numeric:tabular-nums}
 #lpFill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--dim)}
@@ -47,7 +47,8 @@ html,body{-webkit-text-size-adjust:100%;text-size-adjust:100%;margin:0;height:10
 #xy{flex:1;min-height:150px;border:1.5px solid var(--fg);border-radius:14px;position:relative;overflow:hidden;touch-action:none}
 #xy.active{border-color:var(--ac)}
 #xy canvas{position:absolute;inset:0;width:100%;height:100%}
-#foot{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+#foot{display:grid;grid-template-columns:44px 44px repeat(5,minmax(0,1fr));gap:6px}
+#foot .btn svg{display:block;margin:0 auto}
 #foot .btn{min-width:0;padding:0}
 #start{position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;z-index:10;padding:24px;text-align:center}
 #start h1{font-size:56px;margin:0;letter-spacing:.02em}
@@ -138,12 +139,13 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <div id="looper">
     <button class="btn" id="bLoop">loop</button>
     <div id="lpBar"><div id="lpFill"></div><span id="lpTxt">tap loop to record a pattern</span></div>
-    <button class="btn" id="bUndo">undo</button>
     <button class="btn" id="bClear">clear</button>
     <button class="btn" id="bToPad">→pad</button>
   </div>
   <div id="xy"><canvas id="cv"></canvas></div>
   <div id="foot">
+    <button class="btn" id="bUndo2" aria-label="undo"><svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5L2.5 6 6 9.5"/><path d="M2.5 6H11a4.5 4.5 0 010 9H8"/></svg></button>
+    <button class="btn" id="bRedo2" aria-label="redo"><svg width="18" height="16" viewBox="0 0 18 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.5L15.5 6 12 9.5"/><path d="M15.5 6H7a4.5 4.5 0 000 9h3"/></svg></button>
     <button class="btn" id="bHold">hold</button>
     <button class="btn" id="bTilt">tilt</button>
     <button class="btn" id="bMic">mic</button>
@@ -241,7 +243,8 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.10.1';
+const APP_VERSION='0.12';
+function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
 class PortFX extends AudioWorkletProcessor{
@@ -363,14 +366,23 @@ class PortLoop extends AudioWorkletProcessor{
   constructor(){
     super(); this.MAX=Math.floor(sampleRate*20); this.state='idle'; this.len=0; this.pos=0; this.n=0;
     this.layers=[]; this.cur=null; this.curWrote=false; this.F=Math.floor(sampleRate*0.004);
+    this.past=[]; this.fut=[]; this.preRec=null; this.preDub=null;
     this.port.onmessage=e=>{
       const d=e.data;
-      if(d==='rec'){ this.layers=[[new Float32Array(this.MAX),new Float32Array(this.MAX)]]; this.cur=this.layers[0]; this.n=0; this.state='rec'; this.report(); }
+      if(d==='rec'){ this.preRec=this.snap(); this.layers=[[new Float32Array(this.MAX),new Float32Array(this.MAX)]]; this.cur=this.layers[0]; this.n=0; this.state='rec'; this.report(); }
       else if(d==='close'){ this.close(); }
-      else if(d==='dub'&&this.state==='play'){ this.cur=[new Float32Array(this.len),new Float32Array(this.len)]; this.layers.push(this.cur); this.curWrote=false; this.state='dub'; this.report(); }
-      else if(d==='undub'&&this.state==='dub'){ if(!this.curWrote) this.layers.pop(); this.cur=null; this.state='play'; this.report(); }
-      else if(d==='undo') this.undo();
-      else if(d==='clear'){ this.state='idle'; this.layers=[]; this.cur=null; this.len=0; this.report(); }
+      else if(d==='dub'&&this.state==='play'){ this.preDub=this.snap(); this.cur=[new Float32Array(this.len),new Float32Array(this.len)]; this.layers.push(this.cur); this.curWrote=false; this.state='dub'; this.report(); }
+      else if(d==='undub'&&this.state==='dub'){ if(this.curWrote) this.commit(this.preDub); else this.layers.pop(); this.cur=null; this.state='play'; this.report(); }
+      else if(d==='discardDub'&&this.state==='dub'){ this.layers.pop(); this.cur=null; this.state='play'; this.report(); }
+      else if(d==='cancelRec'&&this.state==='rec'){ this.restore(this.preRec); }
+      else if(d==='clear'){
+        if(this.state==='rec'){ this.restore(this.preRec); return; }
+        if(this.state==='dub'){ this.layers.pop(); this.cur=null; }
+        if(this.state!=='idle'){ this.commit(this.snap()); }
+        this.state='idle'; this.layers=[]; this.cur=null; this.len=0; this.report();
+      }
+      else if(d==='hundo'&&this.past.length){ this.fut.push(this.snap()); this.restore(this.past.pop()); }
+      else if(d==='hredo'&&this.fut.length){ this.past.push(this.snap()); this.restore(this.fut.pop()); }
       else if(d==='export'&&this.len){
         const L=new Float32Array(this.len), R=new Float32Array(this.len);
         for(const ly of this.layers){ for(let i=0;i<this.len;i++){ L[i]+=ly[0][i]; R[i]+=ly[1][i]; } }
@@ -379,13 +391,20 @@ class PortLoop extends AudioWorkletProcessor{
     };
   }
   report(){ this.port.postMessage({type:'state',state:this.state,layers:this.layers.length,len:this.len}); }
+  snap(){ return {layers:this.layers.slice(),len:this.len,st:this.state==='idle'||!this.len?'idle':'play'}; }
+  commit(before){ this.past.push(before); if(this.past.length>12) this.past.shift(); this.fut=[]; this.port.postMessage({type:'hist'}); }
+  restore(sn){
+    this.layers=sn.layers.slice(); this.len=sn.len; this.cur=null;
+    this.state=sn.st==='play'&&this.len?'play':'idle'; this.pos=0; this.report();
+    if(this.state==='play') this.port.postMessage({type:'wrap'});
+  }
   close(){
     if(this.state!=='rec') return;
     if(this.n<sampleRate*0.1){ this.state='idle'; this.layers=[]; this.port.postMessage({type:'empty'}); this.report(); return; }
     this.len=this.n; const F=Math.min(this.F,this.len>>2), b=this.layers[0];
     for(let c=0;c<2;c++){ const a=b[c]; for(let i=0;i<F;i++){ const g=i/F; a[i]*=g; a[this.len-1-i]*=g; } }
     this.layers[0]=[b[0].slice(0,this.len),b[1].slice(0,this.len)];
-    this.pos=0; this.state='play'; this.report(); this.port.postMessage({type:'wrap'});
+    this.pos=0; this.state='play'; this.commit(this.preRec); this.report(); this.port.postMessage({type:'wrap'});
   }
   undo(){
     if(this.state==='idle') return;
@@ -476,7 +495,7 @@ registerProcessor('port-rec',PortRec);
 /* ============ state ============ */
 const $=s=>document.querySelector(s);
 const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
-let loopNode=null,satIn,satShaper,satOut,satTone,micStream=null,echoSend=null,echoDelay,echoLP,echoFb,ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
+let fxB=null,loopNode=null,satIn,satShaper,satOut,satTone,micStream=null,echoSend=null,echoDelay,echoLP,echoFb,ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
 const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,tx:0.5,ty:0.5,
   assign:{size:'x',drift:'y',filter:'tx',reso:'ty'},dir:-1,lastPad:0};
 const pads=new Array(8).fill(null), padEls=[];
@@ -524,7 +543,8 @@ async function start(){
   applySat();
   // audio looper: records the fx output, plays back after the fx
   loopNode=new AudioWorkletNode(ctx,'port-loop',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2]});
-  fx.connect(loopNode); loopNode.connect(filt);
+  fxB=new AudioWorkletNode(ctx,'port-fx',{numberOfInputs:1,numberOfOutputs:1,outputChannelCount:[2]});   // fx for loop playback
+  fxB.connect(filt);
   loopNode.port.onmessage=onLoopMsg;
   echoSend=ctx.createGain(); echoSend.gain.value=0; echoDelay=ctx.createDelay(2); echoDelay.delayTime.value=0.36;
   echoLP=ctx.createBiquadFilter(); echoLP.type='lowpass'; echoLP.frequency.value=2600; echoLP.Q.value=0.5;
@@ -533,6 +553,7 @@ async function start(){
   recNode=new AudioWorkletNode(ctx,'port-rec',{numberOfInputs:2,numberOfOutputs:1,outputChannelCount:[1]});
   padBus.connect(recNode,0,0); limiter.connect(recNode,0,1); recNode.connect(ctx.destination);
   recNode.port.onmessage=onRecMsg;
+  routeLoop();
   if(!padEls.length) buildPadsUI();
   started=true; starting=false;
   // show the instrument right away; the kit loads behind it
@@ -766,7 +787,7 @@ function onMicMsg(e){
   for(let k=0;k<n;k++){ L[k]=pcm[(st+k)*2]/32768; R[k]=pcm[(st+k)*2+1]/32768; }
   normalize(buf);
   const mode=n/sr>2.5?'loop':'one';
-  setPad(i,{name:'mic '+(i+1),buf,mode,gain:0.7,seam:true});
+  histMark(); setPad(i,{name:'mic '+(i+1),buf,mode,gain:0.7,seam:true});
   setMicArm(false);
   logEvent({type:'sample',pad:i,seconds:+(n/sr).toFixed(3)});
   toast(`sampled ${(n/sr).toFixed(1)}s → pad ${i+1}`);
@@ -782,6 +803,7 @@ async function setMicArm(on){
 /* ============ load files ============ */
 $('#file').addEventListener('change',async e=>{
   const fs=[...e.target.files].slice(0,8); if(!fs.length) return;
+  histMark();
   for(let k=0;k<fs.length;k++){
     try{
       const ab=await fs[k].arrayBuffer(), bytes=ab.slice(0); const buf=normalize(await decode(ab));
@@ -806,7 +828,7 @@ const effCut=()=>{ const v=ax('filter'); return v!=null?v:1; };
 function sendParams(){
   if(!fx) return;
   const a={}; WK.forEach(k=>{ const v=ax(k); a[k]=v==null?(k==='tape'?-1:0):(k==='tape'?v:clamp(v*fxDepth)); });
-  fx.port.postMessage({type:'set',size:sizeMs(),pitch:S.pitch,dir:S.dir,a});
+  fxPost({type:'set',size:sizeMs(),pitch:S.pitch,dir:S.dir,a});
   applyFilter(); applyEcho();
   logGesture(); dirty=true;
 }
@@ -819,12 +841,12 @@ function applyEcho(){
   echoDelay.delayTime.setTargetAtTime(clamp(sizeMs()*3/1000,0.06,1.5),t,0.08);
 }
 function engage(){
-  if(S.engaged) fx.port.postMessage({type:'recapture'});
-  else fx.port.postMessage({type:'engage'});
+  if(S.engaged) fxPost({type:'recapture'});
+  else fxPost({type:'engage'});
   S.engaged=true; $('#xy').classList.add('active'); applyEcho(); logGesture(true);
 }
 function release(){
-  fx.port.postMessage({type:'release'}); S.engaged=false; $('#xy').classList.remove('active'); applyEcho(); logGesture(true);
+  fxPost({type:'release'}); S.engaged=false; $('#xy').classList.remove('active'); applyEcho(); logGesture(true);
 }
 function applyFilter(){
   if(!filt) return;
@@ -927,6 +949,7 @@ function onLoopMsg(e){
   const d=e.data;
   if(d.type==='state'){ LP.layers=d.layers; LP.len=d.len/ctx.sampleRate; lpSet(d.state); }
   else if(d.type==='wrap'){ LP.t0=ctx.currentTime; }
+  else if(d.type==='hist'){ H.past.push({kind:'loop'}); if(H.past.length>60) H.past.shift(); H.fut=[]; H.key=null; updHistBtns(); }
   else if(d.type==='empty'){ toast('too short'); }
   else if(d.type==='export'){ loopToPadDone(d); }
 }
@@ -937,7 +960,7 @@ function lpSet(state){
   if(state==='rec') b.classList.add('rec');
   if(state==='play') b.classList.add('on');
   if(state==='dub') b.classList.add('dub','on');
-  updLooper();
+  updLooper(); updHistBtns();
 }
 function lpButton(){
   if(!ctx||!loopNode) return;
@@ -957,7 +980,7 @@ function loopToPad(){
 function loopToPadDone(d){
   const i=loopToPadTarget; if(i<0) return; loopToPadTarget=-1;
   const b=ctx.createBuffer(2,d.L.length,ctx.sampleRate); b.copyToChannel(d.L,0); b.copyToChannel(d.R,1);
-  normalize(b);
+  normalize(b); histMark();
   setPad(i,{name:'loop '+(i+1),buf:b,mode:'loop',gain:0.7,seam:false});
   flash(i); toast(`loop → pad ${i+1}`);
 }
@@ -974,14 +997,80 @@ function drawLooper(){
   else f.style.width='0';
 }
 $('#bLoop').addEventListener('pointerdown',e=>{ e.preventDefault(); lpButton(); });
-$('#bUndo').addEventListener('click',()=>{ if(ctx) lpUndo(); });
+
 $('#bClear').addEventListener('click',()=>{ if(ctx){ lpClear(); toast('loop cleared'); } });
 $('#bToPad').addEventListener('click',()=>{ if(ctx) loopToPad(); });
+
+/* ============ undo / redo (edits, not performance) ============ */
+const H={past:[],fut:[],key:null,t:0};
+function snapState(){
+  return {assign:{...S.assign},dir:S.dir,depth:fxDepth,sat:satAmt,kit:kitName,kitPath,
+    pads:pads.map(p=>p&&{name:p.name,buf:p.orig,mode:p.mode,gain:p.gain,tr:p.tr,rev:p.rev,start:p.start,end:p.end,seam:p.seam,file:p.file,url:p.url,bytes:p.bytes})};
+}
+const PADKEYS=['name','mode','gain','tr','rev','start','end','seam'];
+function samePad(a,b){ if(!a&&!b) return true; if(!a||!b) return false; if(a.orig!==b.buf) return false; return PADKEYS.every(k=>a[k]===b[k]); }
+function histMark(key){
+  const now=performance.now();
+  if(key&&H.key===key&&now-H.t<1500){ H.t=now; return; }
+  H.key=key||null; H.t=now;
+  H.past.push({kind:'state',snap:snapState()}); if(H.past.length>60) H.past.shift();
+  H.fut=[]; updHistBtns();
+}
+function restoreState(sn){
+  S.assign={...sn.assign}; S.dir=sn.dir; fxDepth=sn.depth; satAmt=sn.sat;
+  $('#depthAmt').value=fxDepth; $('#depthV').textContent=Math.round(fxDepth*100);
+  $('#satAmt').value=satAmt; $('#satV').textContent=Math.round(satAmt*100);
+  try{ localStorage.setItem('port.depth',String(fxDepth)); localStorage.setItem('port.sat',String(satAmt)); }catch(e){}
+  applySat(); if($('#fxs').classList.contains('open')) renderFx(); sendParams();
+  for(let i=0;i<8;i++){ const b=sn.pads[i]; if(!samePad(pads[i],b)) setPad(i,b?{...b}:null); }
+  setKitName(sn.kit); kitPath=sn.kitPath; setKitParam(kitPath);
+  if(edOpen()) renderEditor();
+}
+function undo(){
+  if(!ctx) return;
+  if(LP.state==='rec'){ loopNode.port.postMessage('cancelRec'); toast('loop recording cancelled'); return; }
+  if(LP.state==='dub'){ loopNode.port.postMessage('discardDub'); toast('overdub discarded'); return; }
+  const e=H.past.pop(); if(!e){ toast('nothing to undo'); return; }
+  H.key=null;
+  if(e.kind==='loop'){ loopNode.port.postMessage('hundo'); H.fut.push({kind:'loop'}); toast('undo · loop'); }
+  else { H.fut.push({kind:'state',snap:snapState()}); restoreState(e.snap); toast('undo'); }
+  updHistBtns();
+}
+function redo(){
+  if(!ctx) return;
+  const e=H.fut.pop(); if(!e){ toast('nothing to redo'); return; }
+  H.key=null;
+  if(e.kind==='loop'){ loopNode.port.postMessage('hredo'); H.past.push({kind:'loop'}); toast('redo · loop'); }
+  else { H.past.push({kind:'state',snap:snapState()}); restoreState(e.snap); toast('redo'); }
+  updHistBtns();
+}
+function updHistBtns(){
+  $('#bUndo2').disabled=!H.past.length&&LP.state!=='rec'&&LP.state!=='dub';
+  $('#bRedo2').disabled=!H.fut.length;
+}
+$('#bUndo2').addEventListener('click',undo);
+$('#bRedo2').addEventListener('click',redo);
+updHistBtns();
+
+/* ============ loop routing ============ */
+const loopSrc='both';   // loop records the pads after fx, and plays back through its own fx
+function routeLoop(){
+  if(!loopNode) return;
+  try{ padBus.disconnect(loopNode); }catch(e){}
+  try{ fx.disconnect(loopNode); }catch(e){}
+  try{ loopNode.disconnect(); }catch(e){}
+  // what the loop records: dry pads, or the pads after fx
+  if(loopSrc==='dry') padBus.connect(loopNode); else fx.connect(loopNode);
+  // where it plays: through its own fx (same settings, same xy), or straight out
+  if(loopSrc==='wet') loopNode.connect(filt); else loopNode.connect(fxB);
+  loopNode.connect(recNode,0,0);
+}
+
 
 /* ============ master saturation ============ */
 let fxDepth=1.3; try{ const v=parseFloat(localStorage.getItem('port.depth')); if(!isNaN(v)) fxDepth=v; }catch(e){}
 $('#depthAmt').value=fxDepth; $('#depthV').textContent=Math.round(fxDepth*100);
-$('#depthAmt').addEventListener('input',e=>{ fxDepth=+e.target.value; $('#depthV').textContent=Math.round(fxDepth*100); sendParams(); try{ localStorage.setItem('port.depth',String(fxDepth)); }catch(_){} });
+$('#depthAmt').addEventListener('input',e=>{ histMark('depth'); fxDepth=+e.target.value; $('#depthV').textContent=Math.round(fxDepth*100); sendParams(); try{ localStorage.setItem('port.depth',String(fxDepth)); }catch(_){} });
 let satAmt=0.25; try{ const v=parseFloat(localStorage.getItem('port.sat')); if(!isNaN(v)) satAmt=v; }catch(e){}
 function applySat(){
   if(!satIn) return;
@@ -991,7 +1080,7 @@ function applySat(){
   satTone.frequency.setTargetAtTime(19000-satAmt*11000,t,0.05);
 }
 $('#satAmt').value=satAmt; $('#satV').textContent=Math.round(satAmt*100);
-$('#satAmt').addEventListener('input',e=>{ satAmt=+e.target.value; $('#satV').textContent=Math.round(satAmt*100); applySat(); try{ localStorage.setItem('port.sat',String(satAmt)); }catch(_){} });
+$('#satAmt').addEventListener('input',e=>{ histMark('sat'); satAmt=+e.target.value; $('#satV').textContent=Math.round(satAmt*100); applySat(); try{ localStorage.setItem('port.sat',String(satAmt)); }catch(_){} });
 
 /* ============ tilt / shake ============ */
 let lastCrash=0, gotOri=false;
@@ -1010,7 +1099,7 @@ function onMot(e){
 function crash(fromLoop){
   if(!fx) return;
   if(fromLoop!==true) lpCapture({type:'crash'});
-  fx.port.postMessage({type:'crash'});
+  fxPost({type:'crash'});
   xy.animate([{boxShadow:'inset 0 0 0 4px #ff5a3c'},{boxShadow:'inset 0 2px 8px rgba(0,0,0,.35)'}],{duration:700});
   logEvent({type:'crash'});
 }
@@ -1216,13 +1305,13 @@ function offlineNote(){
 function renderKitList(list){
   const el=$('#kitList'); el.innerHTML='';
   const add=(label,on,fn)=>{ const b=document.createElement('button'); b.className='btn'+(on?' on':''); b.textContent=label; b.onclick=fn; el.appendChild(b); };
-  add('demo',kitName==='demo',()=>{ buildDemoKit(); kitPath=null; setKitParam(null); closeSheets(); toast('demo kit'); });
+  add('demo',kitName==='demo',()=>{ histMark(); buildDemoKit(); kitPath=null; setKitParam(null); closeSheets(); toast('demo kit'); });
   (list||[]).forEach(k=>{ add(k.name,kitPath===k.path,()=>selectKit(k)); const b=el.lastChild; kitIsOffline(k).then(o=>{ if(o) b.textContent=k.name+' ✓'; }); });
   offlineNote();
   $('#kitNote').textContent=list==null?'looking for kits…':list.length?`${list.length} kit${list.length>1?'s':''} found in kits/`:'no kits found · add a folder with kit.json to kits/';
 }
 async function selectKit(k){
-  toast('loading '+k.name+'…',10000);
+  toast('loading '+k.name+'…',10000); histMark();
   try{ await loadKitURL(k.path); kitPath=k.path; setKitParam(k.path); closeSheets(); }
   catch(e){ toast('could not load '+k.name+' · check kit.json',4000); }
 }
@@ -1470,7 +1559,7 @@ function renderDriveList(){
   const el=$('#driveList'); el.innerHTML='';
   (driveKits||[]).forEach(k=>{
     const b=document.createElement('button'); b.className='btn'+(kitName===k.name&&!kitPath?' on':''); b.textContent=k.name;
-    b.onclick=async()=>{ toast('loading '+k.name+'…',20000); try{ await loadDriveKit(k); closeSheets(); }catch(e){ toast(e.message,4000); } };
+    b.onclick=async()=>{ toast('loading '+k.name+'…',20000); histMark(); try{ await loadDriveKit(k); closeSheets(); }catch(e){ toast(e.message,4000); } };
     el.appendChild(b);
     cacheGetJSON(`kit/${k.id}.json`).then(m=>{ if(m) b.textContent=k.name+' ✓'; });
   });
@@ -1504,12 +1593,12 @@ function closeSheets(){ document.querySelectorAll('.sheet').forEach(x=>x.classLi
   });
   box.addEventListener('click',e=>{
     const b=e.target.closest('button[data-k]'); if(!b) return;
-    const k=b.dataset.k, v=b.dataset.v;
+    const k=b.dataset.k, v=b.dataset.v; histMark();
     if(v==='off') delete S.assign[k]; else S.assign[k]=v;
     renderFx(); sendParams();
   });
 })();
-document.querySelectorAll('[data-dir]').forEach(b=>b.addEventListener('click',()=>{ S.dir=+b.dataset.dir; renderFx(); sendParams(); }));
+document.querySelectorAll('[data-dir]').forEach(b=>b.addEventListener('click',()=>{ histMark(); S.dir=+b.dataset.dir; renderFx(); sendParams(); }));
 function renderFx(){
   $('#bFx').classList.add('on');
   document.querySelectorAll('#fxRows button').forEach(b=>b.classList.toggle('on',(S.assign[b.dataset.k]||'off')===b.dataset.v));
@@ -1564,7 +1653,7 @@ function applyEdit(restart){
   renderPad(edI); renderEditor();
 }
 $('#wave').addEventListener('pointerdown',e=>{
-  const p=pads[edI]; if(!p) return; e.preventDefault();
+  const p=pads[edI]; if(!p) return; e.preventDefault(); histMark();
   const r=e.currentTarget.getBoundingClientRect(), f=clamp((e.clientX-r.left)/r.width);
   edDrag=Math.abs(f-p.start)<Math.abs(f-p.end)?'start':'end';
   try{e.currentTarget.setPointerCapture(e.pointerId);}catch(_){}
@@ -1579,25 +1668,27 @@ function moveHandle(f){
   p.start=clamp(p.start); p.end=clamp(p.end); drawWave();
 }
 $('#edTr').addEventListener('input',e=>{
-  const p=pads[edI]; if(!p) return; p.tr=+e.target.value; $('#edTrV').textContent=(p.tr>0?'+':'')+p.tr;
+  const p=pads[edI]; if(!p) return; histMark('tr'+edI); p.tr=+e.target.value; $('#edTrV').textContent=(p.tr>0?'+':'')+p.tr;
   const r=rateOf(p), t=ctx.currentTime;
   if(p.src) p.src.playbackRate.setTargetAtTime(r,t,0.01);
   p.voices.forEach(v=>v.playbackRate.setTargetAtTime(r,t,0.01));
 });
 $('#edGain').addEventListener('input',e=>{
-  const p=pads[edI]; if(!p) return; p.gain=+e.target.value; $('#edGainV').textContent=Math.round(p.gain*100);
+  const p=pads[edI]; if(!p) return; histMark('gain'+edI); p.gain=+e.target.value; $('#edGainV').textContent=Math.round(p.gain*100);
   if(p.g) p.g.gain.setTargetAtTime(p.gain,ctx.currentTime,0.02);
 });
-$('#edMode').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; stopLoop(p); p.mode=p.mode==='loop'?'one':'loop'; applyEdit(false); });
-$('#edRev').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; p.rev=!p.rev; applyEdit(true); });
-$('#edSeam').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; p.seam=!p.seam; applyEdit(true); });
+$('#edMode').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; histMark(); stopLoop(p); p.mode=p.mode==='loop'?'one':'loop'; applyEdit(false); });
+$('#edRev').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; histMark(); p.rev=!p.rev; applyEdit(true); });
+$('#edSeam').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; histMark(); p.seam=!p.seam; applyEdit(true); });
 $('#edPlay').addEventListener('click',()=>hitPad(edI));
-$('#edReset').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; p.tr=0; p.rev=false; p.start=0; p.end=1; p.gain=0.7; if(p.g) p.g.gain.setTargetAtTime(p.gain,ctx.currentTime,0.02); if(p.src) p.src.playbackRate.value=1; applyEdit(true); });
+$('#edReset').addEventListener('click',()=>{ const p=pads[edI]; if(!p) return; histMark(); p.tr=0; p.rev=false; p.start=0; p.end=1; p.gain=0.7; if(p.g) p.g.gain.setTargetAtTime(p.gain,ctx.currentTime,0.02); if(p.src) p.src.playbackRate.value=1; applyEdit(true); });
 $('#edPrev').addEventListener('click',()=>{ edI=(edI+7)%8; renderEditor(); });
 $('#edNext').addEventListener('click',()=>{ edI=(edI+1)%8; renderEditor(); });
 addEventListener('resize',()=>{ if(edOpen()) drawWave(); });
 addEventListener('keydown',e=>{
-  if(!ctx||e.repeat||e.target.closest('input')) return;
+  if(!ctx||e.target.closest('input')) return;
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='z'){ e.preventDefault(); e.shiftKey?redo():undo(); return; }
+  if(e.repeat) return;
   const k=parseInt(e.key,10); if(k>=1&&k<=8){ hitPad(k-1); return; }
   if(e.key==='c') crash();
   if(e.key==='l') lpButton();
@@ -1606,7 +1697,7 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>{ if(ctx&&e.key===' '&&!S.hold&&!e.target.closest('input')) release(); });
 
 /* test hook */
-window.__port={LP,lpButton,S,pads,openEditor,get take(){return take;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
+window.__port={H,undo,redo,get loopSrc(){return loopSrc;},LP,lpButton,S,pads,openEditor,get take(){return take;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
 </script>
 </body>
 </html>
