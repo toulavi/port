@@ -190,6 +190,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <div id="fxRows"></div>
   </div>
   <div class="lbl">master</div>
+  <div class="sl"><span class="k">dry / wet</span><input type="range" id="wetAmt" min="0" max="1" step="0.01" value="1"><span class="v" id="wetV">100</span></div>
   <div class="sl"><span class="k">fx depth</span><input type="range" id="depthAmt" min="0.5" max="2" step="0.05" value="1.3"><span class="v" id="depthV">130</span></div>
   <div class="sl"><span class="k">saturation</span><input type="range" id="satAmt" min="0" max="1" step="0.01" value="0.25"><span class="v" id="satV">25</span></div>
 </div>
@@ -264,7 +265,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.19';
+const APP_VERSION='0.20';
 function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
@@ -278,7 +279,7 @@ class PortFX extends AudioWorkletProcessor{
     this.pitch=1; this.dir=-1;
     this.a={drift:0,pass:0,smear:0,jitter:0,reverse:0,tape:-1,ring:0};
     // variation (beat-repeat style), freeze (pinch out), resonate (pinch in)
-    this.vari=0; this.cS=1; this.cRate=1;
+    this.vari=0; this.cS=1; this.cRate=1; this.wetT=1; this.wet=1;
     this.fzT=0; this.fz=0; this.fzOn=false; this.FZN=Math.floor(sampleRate*0.5);
     this.fzL=new Float32Array(this.FZN); this.fzR=new Float32Array(this.FZN);
     this.fg=[0,1,2,3].map(k=>({g:0,G:0,p:0,o:0,r:1,st:k/4}));
@@ -300,6 +301,7 @@ class PortFX extends AudioWorkletProcessor{
         if(d.dir!=null) this.dir=d.dir;
         if(d.a) Object.assign(this.a,d.a);
         if(d.vari!=null) this.vari=d.vari;
+        if(d.wet!=null) this.wetT=d.wet;
         if(d.freeze!=null) this.fzT=d.freeze;
         if(d.res!=null) this.raT=d.res;
       }
@@ -440,6 +442,9 @@ class PortFX extends AudioWorkletProcessor{
           const ra=this.ra, G=0.9; yl=yl*(1-ra)+rl*G*ra; yr=yr*(1-ra)+rr*G*ra;
         }
       }
+      // dry / wet
+      this.wet+=(this.wetT-this.wet)*0.002;
+      yl=xl+(yl-xl)*this.wet; yr=xr+(yr-xr)*this.wet;
       oL[i]=yl; if(oR!==oL) oR[i]=yr;
     }
     return true;
@@ -969,7 +974,7 @@ function sendParams(){
   if(!fx) return;
   const a={}; WK.forEach(k=>{ const v=ax(k); a[k]=v==null?(k==='tape'?-1:0):(k==='tape'?v:clamp(v*fxDepth)); });
   const vv=ax('variation');
-  fxPost({type:'set',size:sizeMs(),pitch:1,dir:S.dir,a,vari:vv==null?0:clamp(vv*fxDepth),freeze:S.fz,res:S.ra});
+  fxPost({type:'set',size:sizeMs(),pitch:1,dir:S.dir,a,vari:vv==null?0:clamp(vv*fxDepth),freeze:S.fz,res:S.ra,wet:fxWet});
   applyFilter(); applyEcho();
   logGesture(); dirty=true;
 }
@@ -1159,7 +1164,7 @@ $('#advReset').addEventListener('click',()=>{ histMark(); S.assign={size:'x',var
 /* ============ undo / redo (edits, not performance) ============ */
 const H={past:[],fut:[],key:null,t:0};
 function snapState(){
-  return {assign:{...S.assign},dir:S.dir,depth:fxDepth,sat:satAmt,kit:kitName,kitPath,
+  return {assign:{...S.assign},dir:S.dir,depth:fxDepth,sat:satAmt,wet:fxWet,kit:kitName,kitPath,
     pads:pads.map(p=>p&&{name:p.name,buf:p.orig,mode:p.mode,gain:p.gain,tr:p.tr,rev:p.rev,start:p.start,end:p.end,seam:p.seam,file:p.file,url:p.url,bytes:p.bytes})};
 }
 const PADKEYS=['name','mode','gain','tr','rev','start','end','seam'];
@@ -1172,7 +1177,7 @@ function histMark(key){
   H.fut=[]; updHistBtns();
 }
 function restoreState(sn){
-  S.assign={...sn.assign}; S.dir=sn.dir; fxDepth=sn.depth; satAmt=sn.sat;
+  S.assign={...sn.assign}; S.dir=sn.dir; fxDepth=sn.depth; satAmt=sn.sat; if(sn.wet!=null){ fxWet=sn.wet; $('#wetAmt').value=fxWet; $('#wetV').textContent=Math.round(fxWet*100); }
   $('#depthAmt').value=fxDepth; $('#depthV').textContent=Math.round(fxDepth*100);
   $('#satAmt').value=satAmt; $('#satV').textContent=Math.round(satAmt*100);
   try{ localStorage.setItem('port.depth',String(fxDepth)); localStorage.setItem('port.sat',String(satAmt)); }catch(e){}
@@ -1223,6 +1228,9 @@ function routeLoop(){
 
 
 /* ============ master saturation ============ */
+let fxWet=1; try{ const v=parseFloat(localStorage.getItem('port.wet')); if(!isNaN(v)) fxWet=v; }catch(e){}
+$('#wetAmt').value=fxWet; $('#wetV').textContent=Math.round(fxWet*100);
+$('#wetAmt').addEventListener('input',e=>{ histMark('wet'); fxWet=+e.target.value; $('#wetV').textContent=Math.round(fxWet*100); sendParams(); try{ localStorage.setItem('port.wet',String(fxWet)); }catch(_){} });
 let fxDepth=1.3; try{ const v=parseFloat(localStorage.getItem('port.depth')); if(!isNaN(v)) fxDepth=v; }catch(e){}
 $('#depthAmt').value=fxDepth; $('#depthV').textContent=Math.round(fxDepth*100);
 $('#depthAmt').addEventListener('input',e=>{ histMark('depth'); fxDepth=+e.target.value; $('#depthV').textContent=Math.round(fxDepth*100); sendParams(); try{ localStorage.setItem('port.depth',String(fxDepth)); }catch(_){} });
@@ -1301,7 +1309,7 @@ function onRecMsg(e){
     if(S.rec&&recFrames/ctx.sampleRate>REC_MAX_SEC){ stopRec(); toast('rec limit reached'); }
   }else if(d.type==='done'){
     take={dry:concat(recChunks[0]),wet:concat(recChunks[1]),sr:ctx.sampleRate,log:recLog,date:new Date(),kit:kitName,
-      fx:{assign:{...S.assign},driftDir:S.dir,saturation:satAmt,depth:fxDepth},
+      fx:{assign:{...S.assign},driftDir:S.dir,saturation:satAmt,depth:fxDepth,wet:fxWet},
       pads:pads.map(p=>p&&{name:p.name,file:p.file||null,mode:p.mode,gain:+p.gain.toFixed(2),transpose:p.tr,reverse:p.rev,start:+p.start.toFixed(4),end:+p.end.toFixed(4),seamless:p.seam})};
     recChunks=[[],[]];
     take.no=++takeSeq; take.name=defaultName(take.date)+(takes.some(t=>defaultName(t.date)===defaultName(take.date))?`_${take.no}`:'');
