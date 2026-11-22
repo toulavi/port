@@ -234,7 +234,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
   <input class="field" id="expName" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
   <div class="lbl" id="expFiles"></div>
   <div class="grid2"><button class="btn" id="expGo">share / save</button><button class="btn" id="expReset">reset name</button></div>
-  <div class="grid2"><button class="btn" id="expDel">delete take</button></div>
+  <div class="grid2"><button class="btn" id="expAll">export all</button><button class="btn" id="expDel">delete take</button></div>
 </div>
 <div class="sheet" id="skS">
   <div class="hd"><div class="t">save kit to github</div><button class="btn" data-close>close</button></div>
@@ -265,7 +265,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.20';
+const APP_VERSION='0.21';
 function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
@@ -1382,7 +1382,8 @@ const safe=s=>String(s).replace(/[^a-z0-9_-]+/gi,'-').slice(0,20);
 const stamp=d=>`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`;
 const defaultName=d=>`port_${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`;
 const cleanName=s=>String(s||'').trim().replace(/[\/\\:*?"<>|\u0000-\u001f]+/g,'-').replace(/\s+/g,'_').slice(0,60);
-function buildTakeZip(tk,name){
+function buildTakeZip(tk,name){ return zip(takeFiles(tk,name,'')); }
+function takeFiles(tk,name,dir){
   name=cleanName(name)||defaultName(tk.date);
   const sr=tk.sr, total=tk.wet.length/2, files=[];
   files.push({name:`${name}_dry.wav`,data:wav(tk.dry,sr)});
@@ -1392,7 +1393,8 @@ function buildTakeZip(tk,name){
     midiMap:{74:'x axis',71:'y axis',1:'tilt left-right',76:'tilt forward-back',20:'freeze (pinch out)',21:'resonate (pinch in)',80:'stutter on'},
     fx:tk.fx,pads:tk.pads,events:tk.log.events,gesture:tk.log.gesture};
   files.push({name:`${name}_log.json`,data:new TextEncoder().encode(JSON.stringify(meta))});
-  return zip(files);
+  if(dir) files.forEach(f=>f.name=`${dir}/${f.name}`);
+  return files;
 }
 const tdur=t=>(t.wet.length/2/t.sr);
 const hhmm=d=>`${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
@@ -1420,6 +1422,7 @@ function renderTakes(){
   });
   const t=selTake;
   $('#expName').value=t.name; updExpFiles();
+  $('#expAll').textContent=takes.length>1?`export all (${takes.length})`:'export all';
   $('#expInfo').textContent=`selected: take ${t.no} · ${tdur(t).toFixed(1)}s · ${t.date.toLocaleString()}`;
 }
 let previewing=null, previewSrc=null;
@@ -1434,11 +1437,7 @@ function togglePreview(t){
   previewSrc=s; previewing=t; selTake=t; renderTakes();
 }
 function updExpFiles(){ const take=selTake; if(!take) return; const n=cleanName($('#expName').value)||defaultName(take.date); $('#expFiles').textContent=`${n}.zip → ${n}_dry.wav · _wet.wav · _gesture.mid · _log.json`; }
-async function exportTake(){
-  const take=selTake;
-  if(!take){ toast('no take yet'); return; }
-  take.name=cleanName($('#expName').value)||defaultName(take.date);
-  const blob=buildTakeZip(take,take.name), fname=`${take.name}.zip`;
+async function shareBlob(blob,fname){
   let file=null; try{ file=new File([blob],fname,{type:'application/zip'}); }catch(e){}
   try{
     if(file&&navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:fname}); return; }
@@ -1449,11 +1448,31 @@ async function exportTake(){
     toast('saved '+fname);
   }catch(e){ toast('export is blocked in this preview'); }
 }
+// every take in one zip, one folder per take
+async function exportAll(){
+  if(!takes.length){ toast('no take yet'); return; }
+  if(selTake) selTake.name=cleanName($('#expName').value)||selTake.name;
+  const used=new Set(), files=[];
+  for(const t of takes){
+    let n=cleanName(t.name)||defaultName(t.date), base=n, k=2; while(used.has(n)) n=`${base}_${k++}`; used.add(n);
+    files.push(...takeFiles(t,n,n));
+  }
+  const d=takes[takes.length-1].date;
+  const fname=`port_${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}_${takes.length}takes.zip`;
+  await shareBlob(zip(files),fname);
+}
+async function exportTake(){
+  const take=selTake;
+  if(!take){ toast('no take yet'); return; }
+  take.name=cleanName($('#expName').value)||defaultName(take.date);
+  await shareBlob(buildTakeZip(take,take.name),`${take.name}.zip`);
+}
 
 /* ============ buttons / keys ============ */
 $('#bRec').addEventListener('click',toggleRec);
 $('#bExp').addEventListener('click',openExport);
 $('#expGo').addEventListener('click',()=>{ $('#expName').blur(); exportTake(); });
+$('#expAll').addEventListener('click',()=>{ $('#expName').blur(); exportAll(); });
 $('#expReset').addEventListener('click',()=>{ if(selTake){ $('#expName').value=defaultName(selTake.date); selTake.name=cleanName($('#expName').value); updExpFiles(); renderTakes(); } });
 $('#expName').addEventListener('input',()=>{ if(selTake){ selTake.name=cleanName($('#expName').value)||defaultName(selTake.date); updExpFiles(); const r=document.querySelector('.trow.sel .tn'); if(r) r.textContent=`${selTake.no} · ${selTake.name}`; } });
 $('#expDel').addEventListener('click',()=>{
@@ -1912,7 +1931,7 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>{ if(ctx&&e.key===' '&&!S.hold&&!e.target.closest('input')) release(); });
 
 /* test hook */
-window.__port={filterHz:()=>filt.frequency.value,filterQ:()=>filt.Q.value,ctxTime:()=>ctx.currentTime,H,undo,redo,get loopSrc(){return loopSrc;},LP,lpButton,S,pads,openEditor,get take(){return take;},get takes(){return takes;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
+window.__port={exportAllFiles:()=>{const f=[];for(const t of takes)f.push(...takeFiles(t,t.name,t.name));return zip(f);},filterHz:()=>filt.frequency.value,filterQ:()=>filt.Q.value,ctxTime:()=>ctx.currentTime,H,undo,redo,get loopSrc(){return loopSrc;},LP,lpButton,S,pads,openEditor,get take(){return take;},get takes(){return takes;},buildTakeZip,toggleRec,hitPad,crash,engage,release,sendParams};
 </script>
 </body>
 </html>
