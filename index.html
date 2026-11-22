@@ -175,7 +175,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <input type="file" id="file" accept="audio/*" multiple>
 <div id="start">
   <h1>port</h1>
-  <p>pads: tap to play · loop pads latch · tap kit name to switch kits<br>xy: touch to stutter · fx: assign effects to x / y<br>2 fingers: spread +12 / pinch −12<br>tilt: filter · shake: crash<br>rec → exp: dry / wet / gesture.mid</p>
+  <p>pads: tap to play · loop pads latch · tap kit name to switch kits<br>xy: touch to stutter · x = grid · y = variation<br>2 fingers: spread = freeze · pinch = resonate<br>tilt: filter · shake: crash<br>rec → exp: dry / wet / gesture.mid</p>
   <button class="btn" id="bStart">tap to start</button>
   <p id="startMsg" style="color:#ffc2b5;opacity:1;min-height:1.2em"></p>
   <p>use wired out for sessions · keys 1–8, c = crash, l = loop on desktop</p>
@@ -183,8 +183,12 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 </div>
 <div class="sheet" id="fxs">
   <div class="hd"><div class="t">fx</div><button class="btn" data-close>close</button></div>
+  <div class="lbl">x = grid (how fine the repeats are) · y = variation (how much the dice change each repeat)<br>two fingers on the pad: spread = freeze · pinch = resonate</div>
+  <div class="grid2"><button class="btn" id="advToggle">advanced ▾</button><button class="btn" id="advReset">back to default</button></div>
+  <div id="advBox" style="display:none">
   <div class="lbl">assign each to x / y, or to tilt (left-right / forward-back) · stack freely · tilt needs the tilt button on</div>
   <div id="fxRows"></div>
+  </div>
   <div class="lbl">master</div>
   <div class="sl"><span class="k">fx depth</span><input type="range" id="depthAmt" min="0.5" max="2" step="0.05" value="1.3"><span class="v" id="depthV">130</span></div>
   <div class="sl"><span class="k">saturation</span><input type="range" id="satAmt" min="0" max="1" step="0.01" value="0.25"><span class="v" id="satV">25</span></div>
@@ -260,7 +264,7 @@ html,body{background-color:var(--bg);background-image:radial-gradient(rgba(255,2
 <div id="toast"></div>
 
 <script>
-const APP_VERSION='0.18';
+const APP_VERSION='0.19';
 function fxPost(m){ if(fx) fx.port.postMessage(m); if(fxB) fxB.port.postMessage(m); }
 /* ============ AudioWorklet processors ============ */
 const WORKLET = `
@@ -273,6 +277,13 @@ class PortFX extends AudioWorkletProcessor{
     this.size=Math.floor(sampleRate*0.12); this.targetSize=this.size;
     this.pitch=1; this.dir=-1;
     this.a={drift:0,pass:0,smear:0,jitter:0,reverse:0,tape:-1,ring:0};
+    // variation (beat-repeat style), freeze (pinch out), resonate (pinch in)
+    this.vari=0; this.cS=1; this.cRate=1;
+    this.fzT=0; this.fz=0; this.fzOn=false; this.FZN=Math.floor(sampleRate*0.5);
+    this.fzL=new Float32Array(this.FZN); this.fzR=new Float32Array(this.FZN);
+    this.fg=[0,1,2,3].map(k=>({g:0,G:0,p:0,o:0,r:1,st:k/4}));
+    this.raT=0; this.ra=0; this.resOn=false; this.resRoot=48;
+    this.rc=[0,1,2,3].map(()=>({b:new Float32Array(4096),w:0,d:100,lp:0}));
     this.driftMul=1; this.driftSt=0; this.cycGain=1; this.lpC=1; this.lpL=0; this.lpR=0; this.cycOn=true; this.densG=1;
     this.jOff=0; this.cycDir=1; this.tapeR=1; this.ringPh=0;
     this.grains=[0,1,2].map(()=>({g:0,G:0,o:0,p:0,stagger:0}));
@@ -288,6 +299,9 @@ class PortFX extends AudioWorkletProcessor{
         if(d.pitch!=null) this.pitch=d.pitch;
         if(d.dir!=null) this.dir=d.dir;
         if(d.a) Object.assign(this.a,d.a);
+        if(d.vari!=null) this.vari=d.vari;
+        if(d.freeze!=null) this.fzT=d.freeze;
+        if(d.res!=null) this.raT=d.res;
       }
       else if(d.type==='crash'){
         if(!this.engaged && this.crashLeft<=0){ this.anchor=this.w; this.resetCycle(); }
@@ -312,6 +326,20 @@ class PortFX extends AudioWorkletProcessor{
     this.cycOn=a.pass<=0.01||Math.random()>a.pass*0.9;      // pass: this cycle lets the live sound through instead of repeating
     this.jOff=a.jitter>0.01?Math.floor(Math.random()*Math.min(this.N/4-S,S*a.jitter*4,sampleRate*0.6)):0;   // stay close: older audio may be silence
     this.cycDir=(a.reverse>0.01&&Math.random()<a.reverse)?-1:1;
+    // variation: one knob, many dice
+    const v=this.vari; this.cS=1; this.cRate=1;
+    if(v>0.01){
+      if(Math.random()<v*0.6){ const o=v>0.5?[0.25,0.5,2]:[0.5,2]; this.cS=o[(Math.random()*o.length)|0]; }
+      if(Math.random()<v*0.35) this.cycDir=-1;
+      if(Math.random()<v*0.3) this.cRate=Math.random()<0.5?0.5:2;
+      if(Math.random()<v*0.4) this.jOff=Math.floor(Math.random()*Math.max(0,Math.min(this.N/4-S,S*4,sampleRate*0.6)));
+      if(Math.random()<v*0.25) this.cycOn=false;
+      if(this.resOn&&Math.random()<v*0.4){ const st=[-7,-5,5,7,12,-12][(Math.random()*6)|0]; this.tuneRes(Math.max(33,Math.min(72,this.resRoot+st))); }
+    }
+  }
+  tuneRes(root){
+    this.resRoot=root; const iv=[0,7,12,19];
+    this.rc.forEach((c,k)=>{ const f=440*Math.pow(2,(root+iv[k]-69)/12); c.d=Math.max(2,Math.min(4000,sampleRate/f)); });
   }
   rd(buf,x){ const N=this.N; const i0=Math.floor(x), fr=x-i0; const a=((i0%N)+N)%N, b=(a+1)%N; return buf[a]+(buf[b]-buf[a])*fr; }
   process(inputs,outputs){
@@ -330,7 +358,7 @@ class PortFX extends AudioWorkletProcessor{
       this.tapeR+=(tapeT-this.tapeR)*0.0015;
       let yl=xl, yr=xr;
       if(this.mix>0.0005){
-        let rate=this.pitch*this.driftMul*this.tapeR*this.cycDir, S=this.size;
+        let rate=this.pitch*this.driftMul*this.tapeR*this.cycDir*this.cRate, S=this.cS===1?this.size:Math.max(64,Math.min(Math.floor(this.N/4),Math.floor(this.size*this.cS)));
         if(crashing){
           if(this.crashSeg<=0){
             const o=[-1,0.5,2,-2,1,-0.5,4];
@@ -372,6 +400,46 @@ class PortFX extends AudioWorkletProcessor{
         if(this.pos>=S){ this.pos-=S; this.newCycle(); }
         else if(this.pos<0){ this.pos+=S; this.newCycle(); }
       } else { this.size=this.targetSize; this.pos=0; }
+      // ---- freeze: grab the last half second and keep it alive as a grain cloud
+      this.fz+=(this.fzT-this.fz)*0.0008;
+      if(this.fzT>0.01&&!this.fzOn){
+        const n=this.FZN; for(let k=0;k<n;k++){ const j=((this.w-n+k)%N+N)%N; this.fzL[k]=this.bL[j]; this.fzR[k]=this.bR[j]; }
+        this.fzOn=true; this.fg.forEach((g,k)=>{ g.G=0; g.st=k/4; });
+      }
+      if(this.fzOn){
+        if(this.fz<0.0005&&this.fzT<=0.01) this.fzOn=false;
+        else{
+          let cl=0, cr=0; const n=this.FZN, v=this.vari;
+          for(const g of this.fg){
+            if(g.G===0||g.g>=g.G){
+              g.G=Math.floor(sampleRate*(0.07+Math.random()*0.12)); g.g=g.st?Math.floor(g.G*g.st):0; g.st=0;
+              g.r=(v>0.2&&Math.random()<v*0.35)?(Math.random()<0.5?0.5:2):1;
+              g.o=Math.random()*Math.max(1,n-g.G*Math.max(1,g.r)-2); g.p=0;
+            }
+            const wv=Math.sin(Math.PI*g.g/g.G), w2=wv*wv, x=g.o+g.p, i0=Math.floor(x), fr=x-i0, i1=Math.min(n-1,i0+1);
+            cl+=(this.fzL[i0]+(this.fzL[i1]-this.fzL[i0])*fr)*w2; cr+=(this.fzR[i0]+(this.fzR[i1]-this.fzR[i0])*fr)*w2;
+            g.g++; g.p+=g.r;
+          }
+          const fz=this.fz; yl=yl*(1-fz)+cl*0.82*fz; yr=yr*(1-fz)+cr*0.82*fz;
+        }
+      }
+      // ---- resonate: four tuned combs (root, 5th, octave, 12th)
+      this.ra+=(this.raT-this.ra)*0.0008;
+      if(this.raT>0.01&&!this.resOn){ this.resOn=true; this.tuneRes(36+Math.floor(Math.random()*24)); }
+      if(this.resOn){
+        if(this.ra<0.0005&&this.raT<=0.01){ this.resOn=false; this.rc.forEach(c=>{ c.b.fill(0); c.lp=0; }); }
+        else{
+          const xin=(yl+yr)*0.5, fb=0.985; let rl=0, rr=0;
+          for(let k=0;k<4;k++){
+            const c=this.rc[k], L=c.b.length, rp=c.w-c.d, i0=Math.floor(rp), fr=rp-i0;
+            const a0=c.b[((i0%L)+L)%L], a1=c.b[(((i0+1)%L)+L)%L], rd=a0+(a1-a0)*fr;
+            c.lp+=(rd-c.lp)*0.5;
+            const o=xin*0.24+c.lp*fb; c.b[c.w]=o; c.w=(c.w+1)%L;
+            if(k&1) rr+=o; else rl+=o;
+          }
+          const ra=this.ra, G=0.9; yl=yl*(1-ra)+rl*G*ra; yr=yr*(1-ra)+rr*G*ra;
+        }
+      }
       oL[i]=yl; if(oR!==oL) oR[i]=yr;
     }
     return true;
@@ -521,8 +589,8 @@ registerProcessor('port-rec',PortRec);
 const $=s=>document.querySelector(s);
 const clamp=(v,a=0,b=1)=>Math.min(b,Math.max(a,v));
 let fxB=null,loopNode=null,satIn,satShaper,satOut,satTone,micStream=null,echoSend=null,echoDelay,echoLP,echoFb,ctx,padBus,fx,filt,limiter,recNode,micNode=null,micSrc=null,wakeLock=null;
-const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,tx:0,ty:0,
-  assign:{size:'x',smear:'y',filter:'tx',reso:'ty'},dir:-1,lastPad:0};
+const S={x:0.45,y:0.25,hold:false,tilt:false,micArm:false,rec:false,pitch:1,engaged:false,tx:0,ty:0,fz:0,ra:0,
+  assign:{size:'x',variation:'y',filter:'tx',reso:'ty'},dir:-1,lastPad:0};
 const pads=new Array(8).fill(null), padEls=[];
 let kitName='';
 let recT0=0,recChunks=[[],[]],recFrames=0,recLog=null,take=null,takes=[],selTake=null,takeSeq=0;
@@ -880,7 +948,7 @@ $('#file').addEventListener('change',async e=>{
 
 /* ============ fx params ============ */
 const FX=[
-  ['size','loop length'],['drift','pitch wanders ±1 oct'],['tape','loop speed ±3 oct'],['reverse','chance of backwards repeats'],
+  ['size','loop length'],['variation','dice: grid · reverse · ±12 · jumps'],['drift','pitch wanders ±1 oct'],['tape','loop speed ±3 oct'],['reverse','chance of backwards repeats'],
   ['jitter','jumps to earlier spots'],['pass','live sound slips through between repeats'],['smear','dissolves into grains'],
   ['ring','metallic ring mod'],['filter','lowpass sweep'],['reso','filter resonance'],['echo','dub echo throws']];
 const ICON_TX='<svg aria-label="tilt left-right" role="img" width="18" height="12" viewBox="0 0 18 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 6h15M5 2.5L1.5 6 5 9.5M13 2.5l3.5 3.5-3.5 3.5"/></svg>';
@@ -900,7 +968,8 @@ const effCut=()=>{ const v=ax('filter'); return v!=null?v:1; };
 function sendParams(){
   if(!fx) return;
   const a={}; WK.forEach(k=>{ const v=ax(k); a[k]=v==null?(k==='tape'?-1:0):(k==='tape'?v:clamp(v*fxDepth)); });
-  fxPost({type:'set',size:sizeMs(),pitch:S.pitch,dir:S.dir,a});
+  const vv=ax('variation');
+  fxPost({type:'set',size:sizeMs(),pitch:1,dir:S.dir,a,vari:vv==null?0:clamp(vv*fxDepth),freeze:S.fz,res:S.ra});
   applyFilter(); applyEcho();
   logGesture(); dirty=true;
 }
@@ -950,15 +1019,16 @@ xy.addEventListener('pointermove',e=>{
   p.x=e.clientX; p.y=e.clientY;
   if(ptrs.size===2){
     const ratio=dist()/twoD0;
-    const np=ratio>1.35?2:ratio<0.74?0.5:1;
-    if(np!==S.pitch){ S.pitch=np; }
+    S.fz=clamp((ratio-1.08)/0.7);     // spread → freeze
+    S.ra=clamp((0.92-ratio)/0.45);    // pinch  → resonate
   }
   sendParams();
 });
 function ptrUp(e){
   if(!ptrs.has(e.pointerId)) return;
   ptrs.delete(e.pointerId);
-  if(ptrs.size<2&&S.pitch!==1){ S.pitch=1; sendParams(); }
+  if(ptrs.size<2&&(S.fz||S.ra)){ S.fz=0; S.ra=0; sendParams(); }
+  if(e.pointerId===primaryPtr&&ptrs.size){ primaryPtr=ptrs.keys().next().value; }
   if(ptrs.size===0){ lpCapture({type:'xy',x:S.x,y:S.y,on:0}); if(!S.hold) release(); }
 }
 xy.addEventListener('pointerup',ptrUp); xy.addEventListener('pointercancel',ptrUp);
@@ -986,7 +1056,7 @@ function draw(){
   if(S.engaged){ g.fillStyle=`rgb(${col})`; g.fill(); } else { g.strokeStyle=`rgb(${col})`; g.lineWidth=1.5; g.stroke(); }
   // live readout: one row per assigned effect
   g.font='11px ui-rounded,system-ui,sans-serif'; g.textBaseline='middle';
-  const SRC={x:'x',y:'y',tx:'l-r',ty:'f-b'}, LOOPY=new Set(['size','drift','tape','reverse','jitter','pass','smear','ring']);
+  const SRC={x:'x',y:'y',tx:'l-r',ty:'f-b'}, LOOPY=new Set(['size','variation','drift','tape','reverse','jitter','pass','smear','ring']);
   let row=0;
   for(const src of ['x','y','tx','ty']){
     for(const [k] of FX){
@@ -1007,9 +1077,14 @@ function draw(){
       g.fillStyle=live?(S.engaged&&LOOPY.has(k)?'#ff5a3c':`rgba(244,243,240,.85)`):`rgba(244,243,240,.3)`; g.fillRect(140,y0-2,44*clamp(frac),4);
     }
   }
-  if(!row){ g.fillStyle='rgba(244,243,240,.5)'; g.fillText('no fx assigned · fx',10,14); }
+  for(const [lab,k,val] of [['out','freeze',S.fz],['in','resonate',S.ra]]){
+    const y0=14+row*16; row++; const live=val>0.01, a=live?0.9:0.4;
+    g.fillStyle=`rgba(244,243,240,${a*0.65})`; g.fillText(lab,10,y0);
+    g.fillStyle=`rgba(244,243,240,${a})`; g.fillText(k,36,y0); g.fillText(`${Math.round(val*100)}%`,86,y0);
+    g.fillStyle='rgba(244,243,240,.14)'; g.fillRect(140,y0-2,44,4);
+    g.fillStyle=live?'#ff5a3c':'rgba(244,243,240,.3)'; g.fillRect(140,y0-2,44*clamp(val),4);
+  }
   g.textBaseline='alphabetic'; g.fillStyle='rgba(244,243,240,.75)';
-  if(S.pitch!==1) g.fillText(S.pitch>1?'+12':'−12',w-40,18);
   if(S.hold) g.fillText('hold',w-40,h-10);
 }
 
@@ -1079,6 +1154,8 @@ $('#lpBar').addEventListener('pointerdown',e=>{
 $('#bClear').addEventListener('click',()=>{ if(ctx){ lpClear(); toast('loop cleared'); } });
 $('#bToPad').addEventListener('click',()=>{ if(ctx) loopToPad(); });
 
+$('#advToggle').addEventListener('click',()=>{ const b=$('#advBox'), open=b.style.display==='none'; b.style.display=open?'':'none'; $('#advToggle').textContent=open?'advanced ▴':'advanced ▾'; });
+$('#advReset').addEventListener('click',()=>{ histMark(); S.assign={size:'x',variation:'y',filter:'tx',reso:'ty'}; renderFx(); sendParams(); toast('fx back to default'); });
 /* ============ undo / redo (edits, not performance) ============ */
 const H={past:[],fut:[],key:null,t:0};
 function snapState(){
@@ -1205,7 +1282,7 @@ function logGesture(force){
   if(!S.rec) return;
   const t=ctx.currentTime-recT0, G=recLog.gesture, last=G[G.length-1];
   if(!force&&last&&t-last.t<0.01) return;
-  G.push({t:+t.toFixed(4),x:+S.x.toFixed(4),y:+S.y.toFixed(4),tx:+S.tx.toFixed(4),ty:+S.ty.toFixed(4),pitch:S.pitch,on:S.engaged?1:0});
+  G.push({t:+t.toFixed(4),x:+S.x.toFixed(4),y:+S.y.toFixed(4),tx:+S.tx.toFixed(4),ty:+S.ty.toFixed(4),fz:+S.fz.toFixed(3),ra:+S.ra.toFixed(3),on:S.engaged?1:0});
 }
 function toggleRec(){
   if(!ctx) return;
@@ -1256,7 +1333,7 @@ function midi(G){
   G.forEach(p=>{
     cc(p.t,74,Math.round(p.x*127)); cc(p.t,71,Math.round(p.y*127));
     cc(p.t,1,Math.round(p.tx*127)); cc(p.t,76,Math.round(p.ty*127));
-    cc(p.t,20,p.pitch>1?127:p.pitch<1?0:64); cc(p.t,80,p.on?127:0);
+    cc(p.t,20,Math.round((p.fz||0)*127)); cc(p.t,21,Math.round((p.ra||0)*127)); cc(p.t,80,p.on?127:0);
   });
   const vlq=n=>{const a=[n&0x7f];while(n>>=7)a.unshift((n&0x7f)|0x80);return a;};
   const body=[0,0xFF,0x51,3,0x07,0xA1,0x20]; let prev=0;
@@ -1304,7 +1381,7 @@ function buildTakeZip(tk,name){
   files.push({name:`${name}_wet.wav`,data:wav(tk.wet,sr)});
   files.push({name:`${name}_gesture.mid`,data:midi(tk.log.gesture)});
   const meta={app:'port',version:APP_VERSION,name,sampleRate:sr,date:tk.date.toISOString(),seconds:+(total/sr).toFixed(3),kit:tk.kit,
-    midiMap:{74:'x axis',71:'y axis',1:'tilt left-right',76:'tilt forward-back',20:'pitch (0=-12,64=0,127=+12)',80:'stutter on'},
+    midiMap:{74:'x axis',71:'y axis',1:'tilt left-right',76:'tilt forward-back',20:'freeze (pinch out)',21:'resonate (pinch in)',80:'stutter on'},
     fx:tk.fx,pads:tk.pads,events:tk.log.events,gesture:tk.log.gesture};
   files.push({name:`${name}_log.json`,data:new TextEncoder().encode(JSON.stringify(meta))});
   return zip(files);
